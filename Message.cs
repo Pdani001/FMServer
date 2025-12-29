@@ -2,15 +2,15 @@
 {
     public class Message
     {
-        public required string Type { get; set; }
-        public byte? SubChannel { get; set; }
-        public string? Nick { get; set; }
-        public string? Channel { get; set; }
-        public string? Text { get; set; }
-        public int? Value { get; set; }
-        public bool? Hidden { get; set; }
-        public bool? AutoClose { get; set; }
-        public bool? Echo { get; set; }
-        public string? To { get; set; }
+        public required string type { get; set; }
+        public byte? subchannel { get; set; }
+        public string? nick { get; set; }
+        public string? channel { get; set; }
+        public string? text { get; set; }
+        public int? value { get; set; }
+        public bool? hidden { get; set; }
+        public bool? autoclose { get; set; }
+        public bool? echo { get; set; }
+        public string? to { get; set; }
     }
 }

@@ -1,22 +1,18 @@
 ﻿using NetCoreServer;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
-using System.Text.Json;
-using System.Threading.Channels;
 
 namespace FMServer
 {
-    class GameServer : WsServer
+    class GameServer : TcpServer
     {
         private ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private ConcurrentDictionary<string, Channel> _channels = new();
 
         public GameServer(IPAddress address, int port) : base(address, port) { }
 
-        protected override WsSession CreateSession()
+        protected override TcpSession CreateSession()
         {
             var s = new ClientSession(this);
             _clients[s.Id] = s;
@@ -37,29 +33,29 @@ namespace FMServer
 
         public void HandleMessage(ClientSession sender, Message msg)
         {
-            switch (msg.Type)
+            switch (msg.type)
             {
                 case "set_nick":
-                    var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.Nick);
+                    var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.nick);
                     if (target != null && target.Id != sender.Id)
                     {
-                        sender.SendTextAsync(JsonSerializer.Serialize(new
+                        sender.Send(new
                         {
                             type = "set_nick",
                             error = "Nickname already in use."
-                        }));
+                        });
                         return;
                     }
-                    sender.Nick = msg.Nick;
-                    sender.SendTextAsync(JsonSerializer.Serialize(new
+                    sender.Nick = msg.nick;
+                    sender.Send(new
                     {
                         type = "set_nick",
                         success = true
-                    }));
+                    });
                     break;
 
                 case "create_channel":
-                    var ch = CreateChannel(sender, msg.Channel, msg.Hidden, msg.AutoClose);
+                    var ch = CreateChannel(sender, msg.channel, msg.hidden, msg.autoclose);
                     JoinChannel(sender, ch);
                     break;
 
@@ -72,18 +68,18 @@ namespace FMServer
                             owner = c.Owner.Nick,
                             clients = c.IsEmpty ? [] : c.GetMemberNicks()
                         });
-                    sender.SendTextAsync(JsonSerializer.Serialize(new
+                    sender.Send(new
                     {
                         type = "channel_list",
                         channels = list
-                    }));
+                    });
                     break;
 
                 case "join_channel":
                     Channel channel;
-                    if (!_channels.TryGetValue(msg.Channel, out channel))
+                    if (!_channels.TryGetValue(msg.channel, out channel))
                     {
-                        channel = CreateChannel(sender, msg.Channel, msg.Hidden ?? false, msg.AutoClose ?? true);
+                        channel = CreateChannel(sender, msg.channel, msg.hidden ?? false, msg.autoclose ?? true);
                     }
                     JoinChannel(sender, channel);
                     break;
@@ -93,43 +89,43 @@ namespace FMServer
                     break;
 
                 case "channel_text":
-                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, JsonSerializer.Serialize(new
+                    sender.CurrentChannel?.Broadcast((msg.echo ?? false) ? "" : sender.Nick, new
                     {
                         type = "channel_text",
-                        subchannel = msg.SubChannel,
+                        msg.subchannel,
                         client = sender.Nick,
-                        text = msg.Text
-                    }));
+                        msg.text
+                    });
                     break;
 
                 case "channel_number":
-                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, JsonSerializer.Serialize(new
+                    sender.CurrentChannel?.Broadcast((msg.echo ?? false) ? "" : sender.Nick, new
                     {
                         type = "channel_number",
-                        subchannel = msg.SubChannel,
+                        msg.subchannel,
                         client = sender.Nick,
-                        value = msg.Value
-                    }));
+                        msg.value
+                    });
                     break;
 
                 case "private_text":
-                    sender.CurrentChannel?.Send(msg.To, JsonSerializer.Serialize(new
+                    sender.CurrentChannel?.Send(msg.to, new
                     {
                         type = "private_text",
-                        subchannel = msg.SubChannel,
+                        msg.subchannel,
                         client = sender.Nick,
-                        text = msg.Text
-                    }));
+                        msg.text
+                    });
                     break;
 
                 case "private_number":
-                    sender.CurrentChannel?.Send(msg.To, JsonSerializer.Serialize(new
+                    sender.CurrentChannel?.Send(msg.to, new
                     {
                         type = "private_number",
-                        subchannel = msg.SubChannel,
+                        msg.subchannel,
                         client = sender.Nick,
-                        value = msg.Value
-                    }));
+                        msg.value
+                    });
                     break;
             }
         }
@@ -138,16 +134,16 @@ namespace FMServer
         {
             if(channel.IsPasswordProtected && channel.Password != password)
             {
-                client.SendTextAsync(JsonSerializer.Serialize(new
+                client.Send(new
                 {
                     type = "channel_joined",
                     error = "Lobby is password protected."
-                }));
+                });
                 return;
             }
             LeaveChannel(client);
             client.CurrentChannel = channel;
-            client.SendTextAsync(JsonSerializer.Serialize(new
+            client.Send(new
             {
                 type = "channel_joined",
                 channel = new {
@@ -155,12 +151,12 @@ namespace FMServer
                     owner = channel.Owner.Nick,
                     clients = channel.IsEmpty ? [] : channel.GetMemberNicks()
                 }
-            }));
-            channel.Broadcast(client.Nick, JsonSerializer.Serialize(new
+            });
+            channel.Broadcast(client.Nick, new
             {
                 type = "channel_user_joined",
                 client = client.Nick
-            }));
+            });
             channel.Join(client);
         }
 
@@ -170,24 +166,24 @@ namespace FMServer
             if (ch == null) return;
 
             ch.Leave(client);
-            client.SendTextAsync(JsonSerializer.Serialize(new
+            client.Send(new
             {
                 type = "channel_left",
                 channelname = ch.Name
-            }));
-            ch.Broadcast(client.Nick, JsonSerializer.Serialize(new
+            });
+            ch.Broadcast(client.Nick, new
             {
                 type = "channel_user_left",
                 client = client.Nick
-            }));
+            });
 
             if (ch.AutoClose && ch.IsOwner(client))
             {
-                ch.Broadcast(client.Nick, JsonSerializer.Serialize(new
+                ch.Broadcast(client.Nick, new
                 {
                     type = "channel_left",
                     channelname = ch.Name
-                }));
+                });
                 _channels.TryRemove(ch.Name, out _);
             }
 

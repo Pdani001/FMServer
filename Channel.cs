@@ -22,16 +22,16 @@ namespace FMServer
             _members[owner.Id] = owner;
         }
         
-        public void Broadcast(string sender, string json)
+        public void Broadcast(string sender, object json)
         {
             foreach (var m in _members.Values.Where(c => c.Nick != sender))
-                m.SendTextAsync(json);
+                m.Send(json);
         }
 
-        public void Send(string to, string json)
+        public void Send(string to, object json)
         {
             var target = _members.Values.FirstOrDefault(c => c.Nick == to);
-            target?.SendTextAsync(json);
+            target?.Send(json);
         }
 
         public void Join(ClientSession session)
