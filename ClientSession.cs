@@ -11,7 +11,7 @@ namespace FMServer
         public string Nick { get; set; } = "Guest";
         public Channel? CurrentChannel { get; set; }
         
-        public bool IsDev { get; set; } = false;
+        public bool IsAdmin { get; set; } = false;
 
         public bool Auth => !string.IsNullOrEmpty(Session);
 

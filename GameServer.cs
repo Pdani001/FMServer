@@ -20,6 +20,8 @@ namespace FMServer
 
         private Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
+        public string AdminName { get; set; }
+
         public GameServer(IPAddress address, int port) : base(address, port) { }
 
         protected override TcpSession CreateSession()
@@ -27,6 +29,15 @@ namespace FMServer
             var s = new ClientSession(this);
             _clients[s.Id] = s;
             return s;
+        }
+
+        protected override void OnStarted()
+        {
+            if(ServerSecret == "")
+            {
+                ServerSecret = StringExt.RandomString(32);
+                Console.WriteLine($"Server secret: {ServerSecret}");
+            }
         }
 
         public void RemoveClient(ClientSession client)
@@ -56,7 +67,6 @@ namespace FMServer
                     }
                     if (valid)
                     {
-                        Console.WriteLine($"Client {sender.Id} authenticated.");
                         sender.Session = Guid.NewGuid().ToString();
                         sender.Send(new
                         {
@@ -97,7 +107,7 @@ namespace FMServer
                         });
                         return;
                     }
-                    if(msg.Nick.Equals("pdani", StringComparison.CurrentCultureIgnoreCase) && !sender.IsDev || msg.Nick.Equals("fmserver", StringComparison.CurrentCultureIgnoreCase))
+                    if(msg.Nick.Equals(AdminName, StringComparison.CurrentCultureIgnoreCase) && !sender.IsAdmin || msg.Nick.Equals("fmserver", StringComparison.CurrentCultureIgnoreCase))
                     {
                         sender.Send(new
                         {
@@ -183,7 +193,7 @@ namespace FMServer
                         msg.SubChannel,
                         client = sender.Nick,
                         msg.Text,
-                        isdev = sender.IsDev
+                        sender.IsAdmin
                     });
                     break;
 
@@ -196,7 +206,7 @@ namespace FMServer
                         msg.SubChannel,
                         client = sender.Nick,
                         msg.Value,
-                        isdev = sender.IsDev
+                        sender.IsAdmin
                     });
                     break;
 
@@ -209,7 +219,7 @@ namespace FMServer
                         msg.SubChannel,
                         client = sender.Nick,
                         msg.Text,
-                        isdev = sender.IsDev
+                        sender.IsAdmin
                     });
                     break;
 
@@ -222,7 +232,7 @@ namespace FMServer
                         msg.SubChannel,
                         client = sender.Nick,
                         msg.Value,
-                        isdev = sender.IsDev
+                        sender.IsAdmin
                     });
                     break;
 
@@ -231,7 +241,8 @@ namespace FMServer
                         return;
                     if (ServerSecret != "" && msg.Text == ServerSecret)
                     {
-                        sender.IsDev = true;
+                        Console.WriteLine($"Client {sender.Id} authenticated with server secret.");
+                        sender.IsAdmin = true;
                         sender.Send(new
                         {
                             type = "server_secret",
