@@ -10,14 +10,31 @@ namespace FMServer
         public new Guid Id { get; } = Guid.NewGuid();
         public string Nick { get; set; } = "Guest";
         public Channel? CurrentChannel { get; set; }
+        
+        public bool IsDev { get; set; } = false;
+
+        public bool Auth => !string.IsNullOrEmpty(Session);
+
+        public string Nonce { get; } = Guid.NewGuid().ToString();
+        public string? Session { get; set; }
 
         private readonly MemoryStream _buffer = new();
+
+        public readonly CancellationTokenSource source = new();
 
         private new GameServer Server => (GameServer)server;
 
         protected override void OnConnected()
         {
-            Send(new { type = "connected" });
+            Send(new { type = "challenge", text = Nonce });
+            CancellationToken token = source.Token;
+            Task.Delay(5000).WaitAsync(token).ContinueWith(_ =>
+            {
+                if (!Auth)
+                    Disconnect();
+                else
+                    Send(new { type = "connected" });
+            });
         }
 
         protected override void OnDisconnected()
@@ -25,6 +42,11 @@ namespace FMServer
             Server.LeaveChannel(this);
             Server.RemoveClient(this);
         }
+
+        private static JsonSerializerOptions JsonSerializerOptions => new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
 
         protected override void OnReceived(byte[] buffer, long offset, long size)
         {
@@ -42,9 +64,14 @@ namespace FMServer
                     return;
 
                 var jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
-                var msg = JsonSerializer.Deserialize<Message>(jsonBytes);
-
-                Server.HandleMessage(this, msg);
+                try {
+                    var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions)!;
+                    Server.HandleMessage(this, msg);
+                }
+                catch (JsonException) 
+                {
+                    Console.WriteLine("Failed to deserialize message: " + Encoding.UTF8.GetString(jsonBytes));
+                }
 
                 var remaining = _buffer.Length - (length + 4);
                 var temp = new byte[remaining];

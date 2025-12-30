@@ -1,7 +1,11 @@
 ﻿using NetCoreServer;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace FMServer
 {
@@ -9,6 +13,12 @@ namespace FMServer
     {
         private ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private ConcurrentDictionary<string, Channel> _channels = new();
+
+        public string ServerSecret { get; set; } = "";
+
+        private readonly string ClientSecret = "[9edp!J3qWd4)XWtW#sa@s@>PJaXEW]Ns0FzYi5{WEA4pfCjgbeEU3+exR)+ww2(";
+
+        private Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
         public GameServer(IPAddress address, int port) : base(address, port) { }
 
@@ -33,10 +43,42 @@ namespace FMServer
 
         public void HandleMessage(ClientSession sender, Message msg)
         {
-            switch (msg.type)
+            switch (msg.Type)
             {
+                case "auth":
+                    if(sender.Auth)
+                        return;
+                    bool valid = false;
+                    using (SHA256 sha256Hash = SHA256.Create())
+                    {
+                        var source = sender.Nonce + ClientSecret;
+                        valid = VerifyHash(sha256Hash, source, msg.Text ?? "");
+                    }
+                    if (valid)
+                    {
+                        Console.WriteLine($"Client {sender.Id} authenticated.");
+                        sender.Session = Guid.NewGuid().ToString();
+                        sender.Send(new
+                        {
+                            type = "auth",
+                            text = sender.Session
+                        });
+                    }
+                    else
+                    {
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Invalid secret."
+                        });
+                    }
+                    sender.source.Cancel();
+                    break;
+
                 case "set_nick":
-                    var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.nick);
+                    if(!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.Nick);
                     if (target != null && target.Id != sender.Id)
                     {
                         sender.Send(new
@@ -46,7 +88,25 @@ namespace FMServer
                         });
                         return;
                     }
-                    sender.Nick = msg.nick;
+                    if (!nameRegex.IsMatch(msg.Nick))
+                    {
+                        sender.Send(new
+                        {
+                            type = "set_nick",
+                            error = "Invalid nickname. Use 3-24 alphanumeric characters or underscores."
+                        });
+                        return;
+                    }
+                    if(msg.Nick.Equals("pdani", StringComparison.CurrentCultureIgnoreCase) && !sender.IsDev || msg.Nick.Equals("fmserver", StringComparison.CurrentCultureIgnoreCase))
+                    {
+                        sender.Send(new
+                        {
+                            type = "set_nick",
+                            error = "This nickname is reserved."
+                        });
+                        return;
+                    }
+                    sender.Nick = msg.Nick;
                     sender.Send(new
                     {
                         type = "set_nick",
@@ -55,11 +115,24 @@ namespace FMServer
                     break;
 
                 case "create_channel":
-                    var ch = CreateChannel(sender, msg.channel, msg.hidden, msg.autoclose);
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    if (!nameRegex.IsMatch(msg.Channel))
+                    {
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Invalid name. Use 3-24 alphanumeric characters or underscores."
+                        });
+                        return;
+                    }
+                    var ch = CreateChannel(sender, msg.Channel, msg.Hidden, msg.AutoClose);
                     JoinChannel(sender, ch);
                     break;
 
                 case "list_channels":
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
                     var list = _channels.Values
                         .Where(c => !c.Hidden)
                         .Select(c => new
@@ -76,56 +149,95 @@ namespace FMServer
                     break;
 
                 case "join_channel":
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
                     Channel channel;
-                    if (!_channels.TryGetValue(msg.channel, out channel))
+                    if (!_channels.TryGetValue(msg.Channel, out channel))
                     {
-                        channel = CreateChannel(sender, msg.channel, msg.hidden ?? false, msg.autoclose ?? true);
+                        if (!nameRegex.IsMatch(msg.Channel))
+                        {
+                            sender.Send(new
+                            {
+                                type = "set_nick",
+                                error = "Invalid name. Use 3-24 alphanumeric characters or underscores."
+                            });
+                            return;
+                        }
+                        channel = CreateChannel(sender, msg.Channel, msg.Hidden ?? false, msg.AutoClose ?? true);
                     }
                     JoinChannel(sender, channel);
                     break;
 
                 case "leave_channel":
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
                     LeaveChannel(sender);
                     break;
 
                 case "channel_text":
-                    sender.CurrentChannel?.Broadcast((msg.echo ?? false) ? "" : sender.Nick, new
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, new
                     {
                         type = "channel_text",
-                        msg.subchannel,
+                        msg.SubChannel,
                         client = sender.Nick,
-                        msg.text
+                        msg.Text,
+                        isdev = sender.IsDev
                     });
                     break;
 
                 case "channel_number":
-                    sender.CurrentChannel?.Broadcast((msg.echo ?? false) ? "" : sender.Nick, new
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, new
                     {
                         type = "channel_number",
-                        msg.subchannel,
+                        msg.SubChannel,
                         client = sender.Nick,
-                        msg.value
+                        msg.Value,
+                        isdev = sender.IsDev
                     });
                     break;
 
                 case "private_text":
-                    sender.CurrentChannel?.Send(msg.to, new
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    sender.CurrentChannel?.Send(msg.To, new
                     {
                         type = "private_text",
-                        msg.subchannel,
+                        msg.SubChannel,
                         client = sender.Nick,
-                        msg.text
+                        msg.Text,
+                        isdev = sender.IsDev
                     });
                     break;
 
                 case "private_number":
-                    sender.CurrentChannel?.Send(msg.to, new
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    sender.CurrentChannel?.Send(msg.To, new
                     {
                         type = "private_number",
-                        msg.subchannel,
+                        msg.SubChannel,
                         client = sender.Nick,
-                        msg.value
+                        msg.Value,
+                        isdev = sender.IsDev
                     });
+                    break;
+
+                case "server_secret":
+                    if (!sender.Auth || sender.Session != msg.Session)
+                        return;
+                    if (ServerSecret != "" && msg.Text == ServerSecret)
+                    {
+                        sender.IsDev = true;
+                        sender.Send(new
+                        {
+                            type = "server_secret",
+                            success = true
+                        });
+                    }
                     break;
             }
         }
@@ -196,6 +308,39 @@ namespace FMServer
         protected override void OnError(SocketError error)
         {
             Console.WriteLine($"Server error: {error}");
+        }
+
+        private static string GetHash(HashAlgorithm hashAlgorithm, string input)
+        {
+
+            // Convert the input string to a byte array and compute the hash.
+            byte[] data = hashAlgorithm.ComputeHash(Encoding.UTF8.GetBytes(input));
+
+            // Create a new Stringbuilder to collect the bytes
+            // and create a string.
+            var sBuilder = new StringBuilder();
+
+            // Loop through each byte of the hashed data
+            // and format each one as a hexadecimal string.
+            for (int i = 0; i < data.Length; i++)
+            {
+                sBuilder.Append(data[i].ToString("x2"));
+            }
+
+            // Return the hexadecimal string.
+            return sBuilder.ToString();
+        }
+
+        // Verify a hash against a string.
+        private static bool VerifyHash(HashAlgorithm hashAlgorithm, string input, string hash)
+        {
+            // Hash the input.
+            var hashOfInput = GetHash(hashAlgorithm, input);
+
+            // Create a StringComparer an compare the hashes.
+            StringComparer comparer = StringComparer.OrdinalIgnoreCase;
+
+            return comparer.Compare(hashOfInput, hash) == 0;
         }
     }
 }
