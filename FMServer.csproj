@@ -11,4 +11,13 @@
     <PackageReference Include="NetCoreServer" Version="8.0.7" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="LICENSE">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="README.md">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

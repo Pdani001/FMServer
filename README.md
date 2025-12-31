@@ -1,6 +1,8 @@
 # Fazbear Multiplayer (Server)
 A dedicated server for use with the [Fazbear Multiplayer game](https://github.com/Pdani001/FMGame)
 
+This project is still under construction! If you'd like to contribute, please get in touch!
+
 The code is subject to the following license
 ---
 
