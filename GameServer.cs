@@ -9,8 +9,20 @@ using System.Text.RegularExpressions;
 
 namespace FMServer
 {
-    class GameServer : TcpServer
+    class GameServer(IPAddress address, int port) : TcpServer(address, port)
     {
+        static GameServer()
+        {
+            try
+            {
+                TICK_RATE = int.Parse(Environment.GetEnvironmentVariable("TICK_RATE") ?? TICK_RATE.ToString());
+            }
+            catch { }
+            TICK_INTERVAL_MS = 1000 / TICK_RATE;
+        }
+        public static readonly int TICK_RATE = 10;
+        public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
+
         private ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private ConcurrentDictionary<string, Channel> _channels = new();
 
@@ -21,8 +33,6 @@ namespace FMServer
         private Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
         public string AdminName { get; set; }
-
-        public GameServer(IPAddress address, int port) : base(address, port) { }
 
         protected override TcpSession CreateSession()
         {
@@ -54,6 +64,34 @@ namespace FMServer
 
         public void HandleMessage(ClientSession sender, Message msg)
         {
+            var senderChannel = sender.CurrentChannel;
+
+            if (senderChannel != null && senderChannel.State != ChannelState.Lobby)
+            {
+                if(senderChannel.State == ChannelState.Starting)
+                {
+                    if(msg.Type == "ready_check")
+                    {
+                        senderChannel.GameState.SetPlayerReady(sender.Nick);
+                        if(senderChannel.GameState.ReadyPlayerCount >= senderChannel.GetMemberNicks().Length)
+                        {
+                            senderChannel.Start();
+                        }
+                    }
+                    return;
+                }
+                // Gameplay input
+                if (!senderChannel.ValidateClientTick(msg.Tick))
+                    return;
+
+                senderChannel.InputQueue.Enqueue(new QueuedInput {
+                    Client = sender,
+                    Message = msg,
+                    ClientTick = msg.Tick.Value,
+                    ReceivedAtTick = senderChannel.CurrentTick
+                });
+                return;
+            }
             switch (msg.Type)
             {
                 case "auth":
@@ -86,7 +124,7 @@ namespace FMServer
                     break;
 
                 case "set_nick":
-                    if(!sender.Auth || sender.Session != msg.Session)
+                    if(!sender.Auth || sender.Session != msg.Session || !sender.NoNick)
                         return;
                     var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.Nick);
                     if (target != null && target.Id != sender.Id)
@@ -125,7 +163,7 @@ namespace FMServer
                     break;
 
                 case "create_channel":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
                     if (!nameRegex.IsMatch(msg.Channel))
                     {
@@ -141,7 +179,7 @@ namespace FMServer
                     break;
 
                 case "list_channels":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
                     var list = _channels.Values
                         .Where(c => !c.Hidden)
@@ -159,10 +197,10 @@ namespace FMServer
                     break;
 
                 case "join_channel":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
-                    Channel channel;
-                    if (!_channels.TryGetValue(msg.Channel, out channel))
+                    //Channel channel;
+                    if (!_channels.TryGetValue(msg.Channel, out var channel))
                     {
                         if (!nameRegex.IsMatch(msg.Channel))
                         {
@@ -179,61 +217,50 @@ namespace FMServer
                     break;
 
                 case "leave_channel":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
                     LeaveChannel(sender);
                     break;
 
-                case "channel_text":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                case "chat":
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
-                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, new
+                    senderChannel?.Broadcast(new
                     {
-                        type = "channel_text",
-                        msg.SubChannel,
+                        type = "chat",
                         client = sender.Nick,
                         msg.Text,
                         sender.IsAdmin
                     });
                     break;
 
-                case "channel_number":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                case "select":
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
                         return;
-                    sender.CurrentChannel?.Broadcast((msg.Echo ?? false) ? "" : sender.Nick, new
+                    senderChannel.GameState.SetPlayerCharacter(sender.Nick, (Character)(msg.Value ?? 5));
+                    break;
+
+                case "ready":
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
+                        return;
+                    if(senderChannel.State == ChannelState.Starting)
+                        senderChannel.Abort();
+                    senderChannel.GameState.SetPlayerReady(sender.Nick, msg.Value == 1);
+                    senderChannel.Broadcast(new
                     {
-                        type = "channel_number",
-                        msg.SubChannel,
+                        type = "ready",
                         client = sender.Nick,
-                        msg.Value,
-                        sender.IsAdmin
+                        ready = msg.Value == 1
                     });
                     break;
 
-                case "private_text":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                case "game_start":
+                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
                         return;
-                    sender.CurrentChannel?.Send(msg.To, new
+                    if (senderChannel.IsOwner(sender) && senderChannel.GameState.ReadyPlayerCount >= senderChannel.GetMemberNicks().Length)
                     {
-                        type = "private_text",
-                        msg.SubChannel,
-                        client = sender.Nick,
-                        msg.Text,
-                        sender.IsAdmin
-                    });
-                    break;
-
-                case "private_number":
-                    if (!sender.Auth || sender.Session != msg.Session)
-                        return;
-                    sender.CurrentChannel?.Send(msg.To, new
-                    {
-                        type = "private_number",
-                        msg.SubChannel,
-                        client = sender.Nick,
-                        msg.Value,
-                        sender.IsAdmin
-                    });
+                        senderChannel.Countdown();
+                    }
                     break;
 
                 case "server_secret":
@@ -275,7 +302,7 @@ namespace FMServer
                     clients = channel.IsEmpty ? [] : channel.GetMemberNicks()
                 }
             });
-            channel.Broadcast(client.Nick, new
+            channel.Broadcast(new
             {
                 type = "channel_user_joined",
                 client = client.Nick
@@ -294,7 +321,7 @@ namespace FMServer
                 type = "channel_left",
                 channelname = ch.Name
             });
-            ch.Broadcast(client.Nick, new
+            ch.Broadcast(new
             {
                 type = "channel_user_left",
                 client = client.Nick
@@ -302,7 +329,7 @@ namespace FMServer
 
             if (ch.AutoClose && ch.IsOwner(client))
             {
-                ch.Broadcast(client.Nick, new
+                ch.Broadcast(new
                 {
                     type = "channel_left",
                     channelname = ch.Name

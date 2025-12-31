@@ -8,7 +8,10 @@ namespace FMServer
     public class ClientSession(TcpServer server) : TcpSession(server)
     {
         public new Guid Id { get; } = Guid.NewGuid();
-        public string Nick { get; set; } = "Guest";
+        public string Nick { get; set; } = "";
+
+        public bool NoNick => string.IsNullOrEmpty(Nick);
+
         public Channel? CurrentChannel { get; set; }
         
         public bool IsAdmin { get; set; } = false;
@@ -23,6 +26,8 @@ namespace FMServer
         public readonly CancellationTokenSource source = new();
 
         private new GameServer Server => (GameServer)server;
+
+        public Character Character { get; set; } = Character.None;
 
         protected override void OnConnected()
         {
