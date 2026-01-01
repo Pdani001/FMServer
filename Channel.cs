@@ -19,6 +19,7 @@ namespace FMServer
         private ConcurrentDictionary<Guid, ClientSession> _members = new();
         public readonly ConcurrentQueue<QueuedInput> InputQueue = new();
         private Thread? TickThread;
+        private readonly Random rng = new(Guid.NewGuid().GetHashCode());
 
         public GameState GameState { get; private set; } = new();
 
@@ -31,41 +32,42 @@ namespace FMServer
             _members[owner.Id] = owner;
         }
 
+        private CancellationTokenSource countdown = new();
+
         public void Abort()
         {
-            if (State == ChannelState.Starting)
+            if (State != ChannelState.Starting)
+                return;
+            countdown.Cancel();
+            countdown = new();
+            State = ChannelState.Lobby;
+            Broadcast(new
             {
-                countdown?.Dispose();
-                countdown = null;
-                State = ChannelState.Lobby;
-                Broadcast(new
-                {
-                    type = "game_starting",
-                    countdown = -1
-                });
-            }
+                type = "game_countdown",
+                countdown = -1
+            });
         }
 
-        private Task? countdown;
         public void Countdown()
         {
             if (State != ChannelState.Lobby)
                 return;
             State = ChannelState.Starting;
-            countdown = Task.Run(() =>
+            Task.Run(() =>
             {
                 int count = 5;
-                while(count > 0)
+                while(count > 0 && !countdown.IsCancellationRequested)
                 {
                     Broadcast(new
                     {
-                        type = "game_starting",
+                        type = "game_countdown",
                         countdown = count
                     });
                     Thread.Sleep(1000);
                     count--;
                 }
-                Start();
+                if(count == 0 && !countdown.IsCancellationRequested)
+                    Start();
             });
         }
 
@@ -85,6 +87,8 @@ namespace FMServer
             TickThread.Start();
         }
 
+        List<long> lag = new(5);
+
         private void RunChannelTickLoop()
         {
             var stopwatch = Stopwatch.StartNew();
@@ -96,6 +100,8 @@ namespace FMServer
 
                 if (elapsed >= nextTickMs)
                 {
+                    lag = lag[1..lag.Capacity];
+                    lag.Add(elapsed);
                     Tick();
                     nextTickMs += GameServer.TICK_INTERVAL_MS;
                 }
@@ -109,6 +115,11 @@ namespace FMServer
         private void Tick()
         {
             CurrentTick++;
+            
+            if(CurrentTick % (GameServer.TICK_RATE * lag.Capacity) == 0)
+            {
+                Console.WriteLine($"[{DateTime.Now}] Current tick drift: {lag.Average()}");
+            }
 
             ProcessInputs();
             UpdateLogic();
@@ -117,6 +128,9 @@ namespace FMServer
 
         private long lastNightTimeUpdateTick = 0;
         private long lastPowerUpdateTick = 0;
+        private long startCameraGarbleTick = 0;
+        private long lastMusicBoxTryTick = 0;
+        private short MusicBoxTry = 0;
 
         private void UpdateLogic()
         {
@@ -144,11 +158,90 @@ namespace FMServer
                 ];
                 int usage = 1 + systems.Count(c => c == true);
                 GameState.Power -= usage;
-                if(GameState.Power < 0)
-                {
-                    GameState.Power = 0;
-                }
                 lastPowerUpdateTick = CurrentTick;
+            }
+            if (CurrentTick - startCameraGarbleTick >= GameServer.TICK_RATE * 3)
+            {
+                GameState.CameraGarble = false;
+            }
+            if (GameState.Power == 0)
+            {
+                if (!GameState.PowerDown)
+                {
+                    GameState.PowerDown = true;
+                    GameState.LeftDoor = false;
+                    GameState.RightDoor = false;
+                    GameState.LeftLight = false;
+                    GameState.RightLight = false;
+                    GameState.CameraActive = false;
+                    lastMusicBoxTryTick = CurrentTick;
+                }
+                else
+                {
+                    switch (GameState.Musicbox)
+                    {
+                        case 0:
+                        case 1:
+                            if (CurrentTick - lastMusicBoxTryTick >= GameServer.TICK_RATE * 5)
+                            {
+                                lastMusicBoxTryTick = CurrentTick;
+                                MusicBoxTry++;
+                                Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
+                                if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                                {
+                                    MusicBoxTry = 0;
+                                    GameState.Musicbox++;
+                                    Broadcast(new
+                                    {
+                                        type = "musicbox",
+                                        value = GameState.Musicbox
+                                    });
+                                }
+                            }
+                            break;
+                        case 2:
+                            if (CurrentTick - lastMusicBoxTryTick >= Math.Round(GameServer.TICK_RATE * 0.3d, MidpointRounding.AwayFromZero))
+                            {
+                                lastMusicBoxTryTick = CurrentTick;
+                                MusicBoxTry = 0;
+                                GameState.Musicbox++;
+                                Broadcast(new
+                                {
+                                    type = "musicbox",
+                                    value = GameState.Musicbox
+                                });
+                            }
+                            break;
+                        case 3:
+                            if (CurrentTick - lastMusicBoxTryTick >= GameServer.TICK_RATE * 2)
+                            {
+                                lastMusicBoxTryTick = CurrentTick;
+                                MusicBoxTry++;
+                                Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
+                                if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                                {
+                                    MusicBoxTry = 0;
+                                    GameState.Musicbox++;
+                                }
+                            }
+                            break;
+                    }
+                    if(GameState.Musicbox < 3)
+                    {
+                        if(CurrentTick - lastMusicBoxTryTick >= GameServer.TICK_RATE * 5)
+                        {
+                            lastMusicBoxTryTick = CurrentTick;
+                            MusicBoxTry++;
+                            Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
+                            if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                            {
+                                MusicBoxTry = 0;
+                                GameState.Musicbox++;
+                            }
+                        }
+                    }
+                }
+                return;
             }
             foreach(var character in GameState.GetPlayingRobots())
             {
@@ -163,6 +256,94 @@ namespace FMServer
                         value = timer
                     });
                 }
+            }
+            int guardPos = GameState.GetCharacterPosition(Character.Guard);
+            foreach (Character character in GameState.GetPlayingRobots().Where(c=>c!=Character.Freddy).OrderBy(GameState.GetRobotAttack))
+            {
+                int position = GameState.GetCharacterPosition(character);
+                long attackTick = GameState.GetRobotAttack(character);
+                int newpos = 1;
+                switch (character)
+                {
+                    case Character.Foxy:
+                        newpos = 5;
+                        if (position == 3)
+                        {
+                            if ((GameState.CameraGarble || (guardPos != 3 && GameState.CameraActive)) && attackTick > CurrentTick)
+                            {
+                                return;
+                            }
+                            if (guardPos == 3 && GameState.CameraActive)
+                                GameState.SetRobotAttack(character, CurrentTick + (long)Math.Round(GameServer.TICK_RATE * 1.7d, MidpointRounding.AwayFromZero));
+                            GameState.SetCharacterPosition(character, 4);
+                            Broadcast(new
+                            {
+                                type = "move",
+                                character,
+                                value = 4
+                            });
+                        }
+                        else if (position == 4 && attackTick <= CurrentTick)
+                        {
+                            if (GameState.LeftDoor)
+                            {
+                                GameState.Power -= 10 + GameState.FoxyAttempt * 13;
+                                GameState.FoxyAttempt++;
+                                newpos = rng.Next(2);
+                                GameState.SetCharacterPosition(character, newpos);
+                                Broadcast(new
+                                {
+                                    type = "move",
+                                    character,
+                                    value = newpos
+                                });
+                                CheckCameraGarble(3, 2);
+                                return;
+                            }
+                            GameState.Jumpscared = character;
+                            GameState.SetCharacterPosition(character, newpos);
+                            Broadcast(new
+                            {
+                                type = "move",
+                                character,
+                                value = newpos
+                            });
+                            CheckCameraGarble(3, 21);
+                        }
+                        return;
+                    case Character.Bonnie:
+                        newpos = 1;
+                        if (attackTick > CurrentTick)
+                        {
+                            return;
+                        }
+                        if(!GameState.LeftDoor)
+                        {
+                            newpos = 22;
+                            GameState.Jumpscared = character;
+                        }
+                        break;
+                    case Character.Chica:
+                        newpos = 1;
+                        if (attackTick > CurrentTick)
+                        {
+                            return;
+                        }
+                        if (!GameState.RightDoor)
+                        {
+                            newpos = 22;
+                            GameState.Jumpscared = character;
+                        }
+                        break;
+                }
+                CheckCameraGarble(position, newpos);
+                GameState.SetCharacterPosition(character, newpos);
+                Broadcast(new
+                {
+                    type = "move",
+                    character,
+                    value = newpos
+                });
             }
         }
 
@@ -211,14 +392,20 @@ namespace FMServer
                     break;
                 case "move":
                     var movechar = GameState.GetPlayerCharacter(input.Client.Nick);
-                    var movetime = GameState.GetCharacterMoveTimer(movechar);
-                    if (movechar == Character.Guard || movetime > 0 || msg.Value == null)
+                    if ((movechar != Character.Guard && GameState.GetCharacterMoveTimer(movechar) > 0) || msg.Value == null)
                         return;
-                    int target = (int)msg.Value;
-                    if (!GameState.IsValidPosition(movechar, target))
+                    int target = msg.Value.Value;
+                    if (!GameState.IsValidMove(movechar, target))
                     {
                         return;
                     }
+                    if (movechar == Character.Guard)
+                    {
+                        GameState.CameraActive = true;
+                        GameState.SetCharacterPosition(movechar, target);
+                        return;
+                    }
+                    int oldPos = GameState.GetCharacterPosition(movechar);
                     switch (movechar)
                     {
                         case Character.Freddy:
@@ -258,8 +445,12 @@ namespace FMServer
                             switch (target)
                             {
                                 case 3:
-                                    if (GameState.GetCharacterPosition(Character.Bonnie) == 3)
+                                    if (GameState.GetCharacterPosition(Character.Bonnie) == 3 || GameState.GetCharacterPosition(Character.Bonnie) >= 21)
                                         return;
+                                    GameState.SetRobotAttack(Character.Foxy, CurrentTick + GameServer.TICK_RATE * 10);
+                                    break;
+                                default:
+                                    GameState.SetRobotAttack(Character.Foxy, 0);
                                     break;
                             }
                             break;
@@ -271,7 +462,77 @@ namespace FMServer
                         character = movechar,
                         value = target
                     });
+                    if(movechar == Character.Foxy)
+                    {
+                        switch (target)
+                        {
+                            case 0:
+                            case 1:
+                            case 2:
+                                if(oldPos < 3)
+                                {
+                                    oldPos = 2;
+                                }
+                                else
+                                {
+                                    oldPos = 3;
+                                }
+                                target = 2;
+                                break;
+                            case 3:
+                                oldPos = 2;
+                                target = 3;
+                                break;
+                        }
+                    }
+                    CheckCameraGarble(oldPos, target);
                     break;
+                case "attack":
+                    movechar = GameState.GetPlayerCharacter(input.Client.Nick);
+                    if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCharacterMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
+                        return;
+                    int position = GameState.GetCharacterPosition(movechar);
+                    target = 21;
+                    switch (movechar)
+                    {
+                        case Character.Freddy:
+                            if(position != 7) return;
+                            if (GameState.RightDoor)
+                            {
+                                target = 1;
+                            }
+                            else
+                                GameState.Jumpscared = movechar;
+                            GameState.SetCharacterPosition(movechar, target);
+                            break;
+                        case Character.Chica:
+                            if (position != 7 || GameState.GetRobotAttack(Character.Bonnie) > CurrentTick) return;
+                            GameState.SetCharacterPosition(movechar, target);
+                            GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
+                            break;
+                        case Character.Bonnie:
+                            if (position != 4 || GameState.GetRobotAttack(Character.Chica) > CurrentTick) return;
+                            GameState.SetCharacterPosition(movechar, target);
+                            GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
+                            break;
+                    }
+                    Broadcast(new
+                    {
+                        type = "move",
+                        character = movechar,
+                        value = target
+                    });
+                    break;
+            }
+        }
+
+        void CheckCameraGarble(int oldPos, int target)
+        {
+            int guardPos = GameState.GetCharacterPosition(Character.Guard);
+            if ((target == guardPos || oldPos == guardPos) && !GameState.CameraGarble)
+            {
+                GameState.CameraGarble = true;
+                startCameraGarbleTick = CurrentTick;
             }
         }
 
@@ -286,7 +547,7 @@ namespace FMServer
                 InputQueue.TryDequeue(out input);
 
                 // Too late → discard
-                if (input.ClientTick < CurrentTick - 5)
+                if (input!.ClientTick < CurrentTick - 5)
                     continue;
 
                 ApplyValidatedInput(input);

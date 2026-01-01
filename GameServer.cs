@@ -15,7 +15,7 @@ namespace FMServer
         {
             try
             {
-                TICK_RATE = int.Parse(Environment.GetEnvironmentVariable("TICK_RATE") ?? TICK_RATE.ToString());
+                TICK_RATE = Math.Clamp(int.Parse(Environment.GetEnvironmentVariable("TICK_RATE") ?? TICK_RATE.ToString()), 10, 200);
             }
             catch { }
             TICK_INTERVAL_MS = 1000 / TICK_RATE;
@@ -182,7 +182,7 @@ namespace FMServer
                     if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
                         return;
                     var list = _channels.Values
-                        .Where(c => !c.Hidden)
+                        .Where(c => !c.Hidden && c.State == ChannelState.Lobby)
                         .Select(c => new
                         {
                             name = c.Name,
@@ -237,29 +237,39 @@ namespace FMServer
                 case "select":
                     if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
                         return;
-                    senderChannel.GameState.SetPlayerCharacter(sender.Nick, (Character)(msg.Value ?? 5));
+                    if (senderChannel.GameState.IsPlayerReady(sender.Nick))
+                        return;
+                    if(!Enum.IsDefined(typeof(Character), msg.Value ?? 5))
+                        return;
+                    var character = (Character)(msg.Value ?? 5);
+                    if (character != Character.None && senderChannel.GameState.IsCharacterPlaying(character))
+                        return;
+                    senderChannel.GameState.SetPlayerCharacter(sender.Nick, character);
+                    senderChannel.Broadcast(new
+                    {
+                        type = "select",
+                        client = sender.Nick,
+                        value = character
+                    });
                     break;
 
                 case "ready":
                     if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
                         return;
-                    if(senderChannel.State == ChannelState.Starting)
-                        senderChannel.Abort();
-                    senderChannel.GameState.SetPlayerReady(sender.Nick, msg.Value == 1);
-                    senderChannel.Broadcast(new
+                    if(senderChannel.GameState.SetPlayerReady(sender.Nick, msg.Value == 1))
                     {
-                        type = "ready",
-                        client = sender.Nick,
-                        ready = msg.Value == 1
-                    });
-                    break;
-
-                case "game_start":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
-                        return;
-                    if (senderChannel.IsOwner(sender) && senderChannel.GameState.ReadyPlayerCount >= senderChannel.GetMemberNicks().Length)
-                    {
-                        senderChannel.Countdown();
+                        if(senderChannel.State == ChannelState.Starting)
+                            senderChannel.Abort();
+                        senderChannel.Broadcast(new
+                        {
+                            type = "ready",
+                            client = sender.Nick,
+                            ready = msg.Value == 1
+                        });
+                        if (senderChannel.GameState.ReadyPlayerCount == senderChannel.GetMemberNicks().Length && senderChannel.State == ChannelState.Lobby)
+                        {
+                            senderChannel.Countdown();
+                        }
                     }
                     break;
 
@@ -288,6 +298,15 @@ namespace FMServer
                 {
                     type = "channel_joined",
                     error = "Lobby is password protected."
+                });
+                return;
+            }
+            if(channel.State != ChannelState.Lobby)
+            {
+                client.Send(new
+                {
+                    type = "channel_joined",
+                    error = "This lobby already exists and is in game"
                 });
                 return;
             }

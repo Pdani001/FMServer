@@ -8,13 +8,37 @@ namespace FMServer
 {
     public class GameState
     {
-        private HashSet<string> readyPlayers = [];
+        private readonly HashSet<string> readyPlayers = [];
         private readonly Dictionary<string, Character> playerCharacters = [];
-        private readonly Dictionary<Character, int> characterMoveTimer = [];
-        private readonly Dictionary<Character, int> characterPosition = [];
+        private readonly Dictionary<Character, int> characterMoveTimer = new()
+        {
+            { Character.Guard, 0 }
+        };
+        private readonly Dictionary<Character, int> characterPosition = new()
+        {
+            { Character.Guard, 0 },
+            { Character.Freddy, 0 },
+            { Character.Bonnie, -1 },
+            { Character.Chica, -1 },
+            { Character.Foxy, 0 }
+        };
+        private readonly Dictionary<Character, long> robotAttackTick = [];
         public int ReadyPlayerCount => readyPlayers.Count;
         public byte NightTime { get; set; } = 12;
-        public int Power { get; set; } = 999;
+        private int _power = 999;
+        public int Power {
+            get => _power;
+            set
+            {
+                _power -= value;
+                if (_power < 0)
+                {
+                    _power = 0;
+                }
+            }
+        }
+        public bool PowerDown { get; set; }
+        public Character Jumpscared { get; set; } = Character.None;
 
         public bool BlockRight { get; set; } = false;
         public bool RightDoor { get; set; } = false;
@@ -23,20 +47,32 @@ namespace FMServer
         public bool LeftDoor { get; set; } = false;
         public bool LeftLight { get; set; } = false;
         public bool CameraActive { get; set; } = false;
+        public bool CameraGarble { get; set; } = false;
+
+        public int FoxyAttempt { get; set; } = 0;
+        public int Musicbox {  get; set; } = 0;
 
         public void ResetReadyPlayers()
         {
             readyPlayers.Clear();
         }
 
-        public void SetPlayerReady(string playerNick, bool value = true)
+        public bool SetPlayerReady(string playerNick, bool value = true)
         {
+            if(GetPlayerCharacter(playerNick) == Character.None) 
+                return false;
             if (!value)
             {
                 readyPlayers.Remove(playerNick);
-                return;
+                return true;
             }
             readyPlayers.Add(playerNick);
+            return true;
+        }
+
+        public bool IsPlayerReady(string playerNick)
+        {
+            return readyPlayers.Contains(playerNick);
         }
 
         public bool SetPlayerCharacter(string playerNick, Character character)
@@ -82,6 +118,11 @@ namespace FMServer
             return playerCharacters.Values.Where(c => c != Character.Guard).ToArray();
         }
 
+        public bool IsCharacterPlaying(Character character)
+        {
+            return playerCharacters.Values.Any(c => c != character);
+        }
+
         public void SetCharacterPosition(Character character, int target)
         {
             if (character == Character.None)
@@ -94,7 +135,21 @@ namespace FMServer
             return characterPosition.GetValueOrDefault(character, -1);
         }
 
-        public bool IsValidPosition(Character character, int position)
+        public long GetRobotAttack(Character character)
+        {
+            if (!GetPlayingRobots().Contains(character))
+                return 0;
+            return robotAttackTick.GetValueOrDefault(character, 0);
+        }
+
+        public void SetRobotAttack(Character character, long next)
+        {
+            if (!GetPlayingRobots().Contains(character))
+                return;
+            robotAttackTick[character] = next;
+        }
+
+        public bool IsValidMove(Character character, int position)
         {
             if(position < 0 || position > 10)
             {
@@ -167,7 +222,11 @@ namespace FMServer
                     door = LeftDoor,
                     light = LeftLight
                 },
-                camera = CameraActive
+                camera = new
+                {
+                    active = CameraActive,
+                    garble = CameraGarble,
+                },
             };
         }
 

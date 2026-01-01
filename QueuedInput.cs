@@ -8,9 +8,9 @@ namespace FMServer
 {
     public class QueuedInput
     {
-        public ClientSession Client;
-        public Message Message;
-        public long ClientTick;
-        public long ReceivedAtTick;
+        public required ClientSession Client;
+        public required Message Message;
+        public required long ClientTick;
+        public required long ReceivedAtTick;
     }
 }
