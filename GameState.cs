@@ -8,11 +8,19 @@ namespace FMServer
 {
     public class GameState
     {
-        private readonly HashSet<string> readyPlayers = [];
-        private readonly Dictionary<string, Character> playerCharacters = [];
+        private readonly HashSet<Guid> readyPlayers = [];
+        private readonly Dictionary<Guid, Character> playerCharacters = [];
         private readonly Dictionary<Character, int> characterMoveTimer = new()
         {
             { Character.Guard, 0 }
+        };
+        private readonly Dictionary<Character, (int, int)> defMoveTimes = new()
+        {
+            { Character.Guard, (0, 0)},
+            { Character.Freddy, (10, 25)},
+            { Character.Bonnie, (10, 15)},
+            { Character.Chica, (10, 20)},
+            { Character.Foxy, (15, 35)},
         };
         private readonly Dictionary<Character, int> characterPosition = new()
         {
@@ -57,46 +65,49 @@ namespace FMServer
             readyPlayers.Clear();
         }
 
-        public bool SetPlayerReady(string playerNick, bool value = true)
+        public bool SetPlayerReady(Guid playerId, bool value = true)
         {
-            if(GetPlayerCharacter(playerNick) == Character.None) 
+            if(GetPlayerCharacter(playerId) == Character.None) 
                 return false;
             if (!value)
             {
-                readyPlayers.Remove(playerNick);
+                readyPlayers.Remove(playerId);
                 return true;
             }
-            readyPlayers.Add(playerNick);
+            readyPlayers.Add(playerId);
             return true;
         }
 
-        public bool IsPlayerReady(string playerNick)
+        public bool IsPlayerReady(Guid playerId)
         {
-            return readyPlayers.Contains(playerNick);
+            return readyPlayers.Contains(playerId);
         }
 
-        public bool SetPlayerCharacter(string playerNick, Character character)
+        public bool SetPlayerCharacter(Guid playerId, Character character)
         {
             if(character == Character.None)
             {
-                playerCharacters.Remove(playerNick);
+                playerCharacters.Remove(playerId);
                 return true;
             }
             if (playerCharacters.ContainsValue(character))
             {
                 return false;
             }
-            playerCharacters[playerNick] = character;
+            playerCharacters[playerId] = character;
             return true;
         }
 
-        public int GetCharacterMoveTimer(Character character)
+        public int GetCurrentMoveTimer(Character character)
         {
-            if(!characterMoveTimer.TryGetValue(character, out var timer))
-            {
-                return 1;
-            }
-            return timer;
+            return characterMoveTimer.GetValueOrDefault(character, 1);
+        }
+
+        public int GetNewMoveTimer(Character character)
+        {
+            if (!defMoveTimes.TryGetValue(character, out var timer))
+                return 0;
+            return GameServer.RNG.Next(timer.Item1, timer.Item2) * GameServer.TICK_RATE;
         }
 
         public void SetCharacterMoveTimer(Character character, int timer)
@@ -104,9 +115,9 @@ namespace FMServer
             characterMoveTimer[character] = timer;
         }
 
-        public Character GetPlayerCharacter(string nick)
+        public Character GetPlayerCharacter(Guid id)
         {
-            if(!playerCharacters.TryGetValue(nick, out var character))
+            if(!playerCharacters.TryGetValue(id, out var character))
             {
                 return Character.None;
             }

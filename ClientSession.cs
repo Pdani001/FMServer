@@ -10,16 +10,24 @@ namespace FMServer
         public new Guid Id { get; } = Guid.NewGuid();
         public string Nick { get; set; } = "";
 
-        public bool NoNick => string.IsNullOrEmpty(Nick);
+        public object Info { get
+            {
+                return new
+                {
+                    Id,
+                    Nick
+                };
+            }
+        }
 
         public Channel? CurrentChannel { get; set; }
         
         public bool IsAdmin { get; set; } = false;
 
-        public bool Auth => !string.IsNullOrEmpty(Session);
+        public bool Auth { get; set; }
 
         public string Nonce { get; } = Guid.NewGuid().ToString();
-        public string? Session { get; set; }
+        public string Session => Id.ToString();
 
         private readonly MemoryStream _buffer = new();
 
@@ -31,9 +39,7 @@ namespace FMServer
 
         protected override void OnConnected()
         {
-            Send(new { type = "challenge", text = Nonce });
-            CancellationToken token = source.Token;
-            Task.Delay(5000).WaitAsync(token).ContinueWith(_ =>
+            Task.Delay(5000).WaitAsync(source.Token).ContinueWith(_ =>
             {
                 if (!Auth)
                     Disconnect();

@@ -11,24 +11,21 @@ namespace FMServer
         public ChannelState State = ChannelState.Lobby;
         public long CurrentTick { get; private set; } = 0;
         public bool Running;
-        public bool Hidden { get; }
-        public bool AutoClose { get; }
+        public bool Hidden { get; set; }
 
         public string Password { get; set; } = "";
 
         private ConcurrentDictionary<Guid, ClientSession> _members = new();
         public readonly ConcurrentQueue<QueuedInput> InputQueue = new();
         private Thread? TickThread;
-        private readonly Random rng = new(Guid.NewGuid().GetHashCode());
 
         public GameState GameState { get; private set; } = new();
 
-        public Channel(string name, ClientSession owner, bool hidden, bool autoClose)
+        public Channel(string name, ClientSession owner, bool hidden)
         {
             Name = name;
             Owner = owner;
             Hidden = hidden;
-            AutoClose = autoClose;
             _members[owner.Id] = owner;
         }
 
@@ -75,6 +72,16 @@ namespace FMServer
         {
             if(State != ChannelState.Starting)
                 return;
+            foreach (var character in GameState.GetPlayingRobots())
+            {
+                int timer = GameState.GetNewMoveTimer(character);
+                GameState.SetCharacterMoveTimer(character, timer);
+                _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Id) == character)?.Send(new
+                {
+                    type = "move_timer",
+                    value = Math.Round(((double)timer) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
+                });
+            }
             Broadcast(new
             {
                 type = "game_start"
@@ -101,7 +108,7 @@ namespace FMServer
                 if (elapsed >= nextTickMs)
                 {
                     lag = lag[1..lag.Capacity];
-                    lag.Add(elapsed);
+                    lag.Add(nextTickMs/elapsed);
                     Tick();
                     nextTickMs += GameServer.TICK_INTERVAL_MS;
                 }
@@ -118,7 +125,7 @@ namespace FMServer
             
             if(CurrentTick % (GameServer.TICK_RATE * lag.Capacity) == 0)
             {
-                Console.WriteLine($"[{DateTime.Now}] Current tick drift: {lag.Average()}");
+                Console.WriteLine($"[{Name}:{DateTime.Now}] Current tick rate: {lag.Average()}");
             }
 
             ProcessInputs();
@@ -187,7 +194,7 @@ namespace FMServer
                                 lastMusicBoxTryTick = CurrentTick;
                                 MusicBoxTry++;
                                 Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
-                                if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                                if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
                                 {
                                     MusicBoxTry = 0;
                                     GameState.Musicbox++;
@@ -218,7 +225,7 @@ namespace FMServer
                                 lastMusicBoxTryTick = CurrentTick;
                                 MusicBoxTry++;
                                 Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
-                                if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                                if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
                                 {
                                     MusicBoxTry = 0;
                                     GameState.Musicbox++;
@@ -233,7 +240,7 @@ namespace FMServer
                             lastMusicBoxTryTick = CurrentTick;
                             MusicBoxTry++;
                             Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
-                            if (rng.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                            if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
                             {
                                 MusicBoxTry = 0;
                                 GameState.Musicbox++;
@@ -243,19 +250,16 @@ namespace FMServer
                 }
                 return;
             }
-            foreach(var character in GameState.GetPlayingRobots())
+            foreach(var character in GameState.GetPlayingRobots().Where(c=>GameState.GetCurrentMoveTimer(c) > 0))
             {
-                int timer = GameState.GetCharacterMoveTimer(character);
-                if(timer > 0)
+                int timer = GameState.GetCurrentMoveTimer(character);
+                timer -= 1;
+                GameState.SetCharacterMoveTimer(character, timer);
+                _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Id) == character)?.Send(new
                 {
-                    timer -= 1;
-                    GameState.SetCharacterMoveTimer(character, timer);
-                    _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Nick) == character)?.Send(new
-                    {
-                        type = "move_timer",
-                        value = timer
-                    });
-                }
+                    type = "move_timer",
+                    value = Math.Round(((double)timer) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
+                });
             }
             int guardPos = GameState.GetCharacterPosition(Character.Guard);
             foreach (Character character in GameState.GetPlayingRobots().Where(c=>c!=Character.Freddy).OrderBy(GameState.GetRobotAttack))
@@ -269,7 +273,7 @@ namespace FMServer
                         newpos = 5;
                         if (position == 3)
                         {
-                            if ((GameState.CameraGarble || (guardPos != 3 && GameState.CameraActive)) && attackTick > CurrentTick)
+                            if ((GameState.CameraGarble || (guardPos != 3 && GameState.CameraActive) || !GameState.CameraActive) && attackTick > CurrentTick)
                             {
                                 return;
                             }
@@ -289,7 +293,7 @@ namespace FMServer
                             {
                                 GameState.Power -= 10 + GameState.FoxyAttempt * 13;
                                 GameState.FoxyAttempt++;
-                                newpos = rng.Next(2);
+                                newpos = GameServer.RNG.Next(2);
                                 GameState.SetCharacterPosition(character, newpos);
                                 Broadcast(new
                                 {
@@ -353,7 +357,7 @@ namespace FMServer
             switch (msg.Type)
             {
                 case "door":
-                    if (GameState.GetPlayerCharacter(input.Client.Nick) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
                         return;
                     if(msg.LeftSide == true)
                     {
@@ -367,7 +371,7 @@ namespace FMServer
                     }
                     break;
                 case "light":
-                    if (GameState.GetPlayerCharacter(input.Client.Nick) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
                         return;
                     if (msg.LeftSide == true)
                     {
@@ -386,13 +390,13 @@ namespace FMServer
                     }
                     break;
                 case "camera":
-                    if (GameState.GetPlayerCharacter(input.Client.Nick) != Character.Guard || GameState.Power <= 0)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0)
                         return;
                     GameState.CameraActive = msg.Value == 1;
                     break;
                 case "move":
-                    var movechar = GameState.GetPlayerCharacter(input.Client.Nick);
-                    if ((movechar != Character.Guard && GameState.GetCharacterMoveTimer(movechar) > 0) || msg.Value == null)
+                    var movechar = GameState.GetPlayerCharacter(input.Client.Id);
+                    if ((movechar != Character.Guard && GameState.GetCurrentMoveTimer(movechar) > 0) || msg.Value == null)
                         return;
                     int target = msg.Value.Value;
                     if (!GameState.IsValidMove(movechar, target))
@@ -455,6 +459,7 @@ namespace FMServer
                             }
                             break;
                     }
+                    GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
                     GameState.SetCharacterPosition(movechar, target);
                     Broadcast(new
                     {
@@ -488,8 +493,8 @@ namespace FMServer
                     CheckCameraGarble(oldPos, target);
                     break;
                 case "attack":
-                    movechar = GameState.GetPlayerCharacter(input.Client.Nick);
-                    if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCharacterMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
+                    movechar = GameState.GetPlayerCharacter(input.Client.Id);
+                    if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCurrentMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
                         return;
                     int position = GameState.GetCharacterPosition(movechar);
                     target = 21;
@@ -604,24 +609,33 @@ namespace FMServer
         public void Leave(ClientSession session)
         {
             _members.TryRemove(session.Id, out _);
-            if(IsOwner(session) && !AutoClose && !IsEmpty)
+            if(IsOwner(session) && !IsEmpty)
             {
                 Owner = _members.Values.First();
+                Broadcast(new
+                {
+                    type = "change_owner",
+                    client = Owner.Info
+                });
             }
             if(_members.Count <= 1 && Running)
             {
                 Running = false;
                 State = ChannelState.Lobby;
                 CurrentTick = 0;
+                Broadcast(new
+                {
+                    type = "game_abort"
+                });
             }
         }
         public bool IsPasswordProtected => !string.IsNullOrEmpty(Password);
         public bool IsEmpty => _members.IsEmpty;
         public bool IsOwner(ClientSession s) => s.Id == Owner.Id;
 
-        internal string[] GetMemberNicks()
+        internal List<object> GetMembers()
         {
-            return _members.Values.Select(c => c.Nick).ToArray();
+            return _members.Values.Select(c => c.Info).ToList();
         }
     }
 }

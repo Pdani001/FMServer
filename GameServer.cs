@@ -1,6 +1,5 @@
 ﻿using NetCoreServer;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -22,6 +21,7 @@ namespace FMServer
         }
         public static readonly int TICK_RATE = 10;
         public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
+        public const int PROTOCOL_VERSION = 1;
 
         private ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private ConcurrentDictionary<string, Channel> _channels = new();
@@ -32,7 +32,9 @@ namespace FMServer
 
         private Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
-        public string AdminName { get; set; }
+        public string AdminName { get; set; } = "";
+
+        public static readonly Random RNG = new(Guid.NewGuid().GetHashCode());
 
         protected override TcpSession CreateSession()
         {
@@ -46,7 +48,7 @@ namespace FMServer
             if(ServerSecret == "")
             {
                 ServerSecret = StringExt.RandomString(32);
-                Console.WriteLine($"Server secret: {ServerSecret}");
+                Console.WriteLine($"[{DateTime.Now}] Server secret: {ServerSecret}");
             }
         }
 
@@ -55,9 +57,9 @@ namespace FMServer
             _clients.TryRemove(client.Id, out _);
         }
 
-        public Channel CreateChannel(ClientSession owner, string name, bool? hidden = false, bool? autoclose = false)
+        public Channel CreateChannel(ClientSession owner, string name, bool? hidden = false)
         {
-            var ch = new Channel(name, owner, hidden ?? false, autoclose ?? false);
+            var ch = new Channel(name, owner, hidden ?? false);
             _channels[name] = ch;
             return ch;
         }
@@ -72,8 +74,8 @@ namespace FMServer
                 {
                     if(msg.Type == "ready_check")
                     {
-                        senderChannel.GameState.SetPlayerReady(sender.Nick);
-                        if(senderChannel.GameState.ReadyPlayerCount >= senderChannel.GetMemberNicks().Length)
+                        senderChannel.GameState.SetPlayerReady(sender.Id);
+                        if(senderChannel.GameState.ReadyPlayerCount >= senderChannel.GetMembers().Count)
                         {
                             senderChannel.Start();
                         }
@@ -94,6 +96,22 @@ namespace FMServer
             }
             switch (msg.Type)
             {
+                case "hello":
+                    if (sender.Auth)
+                        return;
+                    if((msg.Value ?? 0) <= PROTOCOL_VERSION)
+                    {
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Invalid protocol version! (Are you using an older client?)"
+                        });
+                        sender.source.Cancel();
+                        return;
+                    }
+                    sender.Send(new { type = "challenge", text = sender.Nonce });
+                    break;
+
                 case "auth":
                     if(sender.Auth)
                         return;
@@ -105,11 +123,11 @@ namespace FMServer
                     }
                     if (valid)
                     {
-                        sender.Session = Guid.NewGuid().ToString();
+                        sender.Auth = true;
                         sender.Send(new
                         {
                             type = "auth",
-                            text = sender.Session
+                            client = sender.Info
                         });
                     }
                     else
@@ -123,63 +141,42 @@ namespace FMServer
                     sender.source.Cancel();
                     break;
 
-                case "set_nick":
-                    if(!sender.Auth || sender.Session != msg.Session || !sender.NoNick)
-                        return;
-                    var target = _clients.Values.FirstOrDefault(c => c.Nick == msg.Nick);
-                    if (target != null && target.Id != sender.Id)
-                    {
-                        sender.Send(new
-                        {
-                            type = "set_nick",
-                            error = "Nickname already in use."
-                        });
-                        return;
-                    }
-                    if (!nameRegex.IsMatch(msg.Nick))
-                    {
-                        sender.Send(new
-                        {
-                            type = "set_nick",
-                            error = "Invalid nickname. Use 3-24 alphanumeric characters or underscores."
-                        });
-                        return;
-                    }
-                    if(msg.Nick.Equals(AdminName, StringComparison.CurrentCultureIgnoreCase) && !sender.IsAdmin || msg.Nick.Equals("fmserver", StringComparison.CurrentCultureIgnoreCase))
-                    {
-                        sender.Send(new
-                        {
-                            type = "set_nick",
-                            error = "This nickname is reserved."
-                        });
-                        return;
-                    }
-                    sender.Nick = msg.Nick;
-                    sender.Send(new
-                    {
-                        type = "set_nick",
-                        success = true
-                    });
-                    break;
-
                 case "create_channel":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
+                    if (!sender.Auth || sender.Session != msg.Session)
                         return;
-                    if (!nameRegex.IsMatch(msg.Channel))
+                    if (msg.Nick == null || !nameRegex.IsMatch(msg.Nick))
                     {
                         sender.Send(new
                         {
                             type = "error",
-                            error = "Invalid name. Use 3-24 alphanumeric characters or underscores."
+                            error = "Invalid nickname. Use 3-24 alphanumeric characters or underscores."
                         });
                         return;
                     }
-                    var ch = CreateChannel(sender, msg.Channel, msg.Hidden, msg.AutoClose);
+                    if (msg.Channel == null || !nameRegex.IsMatch(msg.Channel))
+                    {
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Invalid lobby name. Use 3-24 alphanumeric characters or underscores."
+                        });
+                        return;
+                    }
+                    if (_channels.ContainsKey(msg.Channel))
+                    {
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Lobby name already in use."
+                        });
+                        return;
+                    }
+                    var ch = CreateChannel(sender, msg.Channel, msg.Hidden);
                     JoinChannel(sender, ch);
                     break;
 
                 case "list_channels":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
+                    if (!sender.Auth || sender.Session != msg.Session)
                         return;
                     var list = _channels.Values
                         .Where(c => !c.Hidden && c.State == ChannelState.Lobby)
@@ -187,7 +184,7 @@ namespace FMServer
                         {
                             name = c.Name,
                             owner = c.Owner.Nick,
-                            clients = c.IsEmpty ? [] : c.GetMemberNicks()
+                            clients = c.IsEmpty ? [] : c.GetMembers()
                         });
                     sender.Send(new
                     {
@@ -197,76 +194,94 @@ namespace FMServer
                     break;
 
                 case "join_channel":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
+                    if (!sender.Auth || sender.Session != msg.Session)
                         return;
-                    //Channel channel;
-                    if (!_channels.TryGetValue(msg.Channel, out var channel))
+                    if (msg.Nick == null || !nameRegex.IsMatch(msg.Nick))
                     {
-                        if (!nameRegex.IsMatch(msg.Channel))
+                        sender.Send(new
+                        {
+                            type = "error",
+                            error = "Invalid nickname. Use 3-24 alphanumeric characters or underscores."
+                        });
+                        return;
+                    }
+                    if(senderChannel != null)
+                    {
+                        // Regular players should never be able to see this
+                        sender.Send(new
+                        {
+                            type = "channel_joined",
+                            error = "You are already in a lobby!"
+                        });
+                        return;
+                    }
+                    if (!_channels.TryGetValue(msg.Channel ?? "", out var channel))
+                    {
+                        if (msg.Channel == null || !nameRegex.IsMatch(msg.Channel))
                         {
                             sender.Send(new
                             {
-                                type = "set_nick",
+                                type = "channel_joined",
                                 error = "Invalid name. Use 3-24 alphanumeric characters or underscores."
                             });
                             return;
                         }
-                        channel = CreateChannel(sender, msg.Channel, msg.Hidden ?? false, msg.AutoClose ?? true);
+                        channel = CreateChannel(sender, msg.Channel, msg.Hidden ?? false);
                     }
                     JoinChannel(sender, channel);
                     break;
 
                 case "leave_channel":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
+                    if (!sender.Auth || sender.Session != msg.Session)
                         return;
                     LeaveChannel(sender);
                     break;
 
                 case "chat":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick)
+                    if (!sender.Auth || sender.Session != msg.Session)
                         return;
                     senderChannel?.Broadcast(new
                     {
                         type = "chat",
-                        client = sender.Nick,
+                        client = sender.Info,
                         msg.Text,
                         sender.IsAdmin
                     });
                     break;
 
                 case "select":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
+                    if (!sender.Auth || sender.Session != msg.Session || senderChannel == null)
                         return;
-                    if (senderChannel.GameState.IsPlayerReady(sender.Nick))
+                    if (senderChannel.GameState.IsPlayerReady(sender.Id))
                         return;
                     if(!Enum.IsDefined(typeof(Character), msg.Value ?? 5))
                         return;
                     var character = (Character)(msg.Value ?? 5);
                     if (character != Character.None && senderChannel.GameState.IsCharacterPlaying(character))
                         return;
-                    senderChannel.GameState.SetPlayerCharacter(sender.Nick, character);
+                    senderChannel.GameState.SetPlayerCharacter(sender.Id, character);
                     senderChannel.Broadcast(new
                     {
                         type = "select",
-                        client = sender.Nick,
+                        client = sender.Info,
                         value = character
                     });
                     break;
 
                 case "ready":
-                    if (!sender.Auth || sender.Session != msg.Session || sender.NoNick || senderChannel == null)
+                    if (!sender.Auth || sender.Session != msg.Session || senderChannel == null)
                         return;
-                    if(senderChannel.GameState.SetPlayerReady(sender.Nick, msg.Value == 1))
+                    if(senderChannel.GameState.SetPlayerReady(sender.Id, msg.Value == 1))
                     {
                         if(senderChannel.State == ChannelState.Starting)
                             senderChannel.Abort();
                         senderChannel.Broadcast(new
                         {
                             type = "ready",
-                            client = sender.Nick,
+                            client = sender.Info,
                             ready = msg.Value == 1
                         });
-                        if (senderChannel.GameState.ReadyPlayerCount == senderChannel.GetMemberNicks().Length && senderChannel.State == ChannelState.Lobby)
+                        if (senderChannel.GameState.ReadyPlayerCount == senderChannel.GetMembers().Count && senderChannel.State == ChannelState.Lobby)
                         {
                             senderChannel.Countdown();
                         }
@@ -306,7 +321,7 @@ namespace FMServer
                 client.Send(new
                 {
                     type = "channel_joined",
-                    error = "This lobby already exists and is in game"
+                    error = "This lobby is already in game"
                 });
                 return;
             }
@@ -318,13 +333,13 @@ namespace FMServer
                 channel = new {
                     name = channel.Name,
                     owner = channel.Owner.Nick,
-                    clients = channel.IsEmpty ? [] : channel.GetMemberNicks()
+                    clients = channel.IsEmpty ? [] : channel.GetMembers()
                 }
             });
             channel.Broadcast(new
             {
                 type = "channel_user_joined",
-                client = client.Nick
+                client = client.Info
             });
             channel.Join(client);
         }
@@ -343,20 +358,10 @@ namespace FMServer
             ch.Broadcast(new
             {
                 type = "channel_user_left",
-                client = client.Nick
+                client = client.Info
             });
 
-            if (ch.AutoClose && ch.IsOwner(client))
-            {
-                ch.Broadcast(new
-                {
-                    type = "channel_left",
-                    channelname = ch.Name
-                });
-                _channels.TryRemove(ch.Name, out _);
-            }
-
-            else if (ch.IsEmpty)
+            if (ch.IsEmpty)
                 _channels.TryRemove(ch.Name, out _);
 
             client.CurrentChannel = null;
