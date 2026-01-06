@@ -67,8 +67,6 @@ namespace FMServer
 
         public bool SetPlayerReady(Guid playerId, bool value = true)
         {
-            if(GetPlayerCharacter(playerId) == Character.None) 
-                return false;
             if (!value)
             {
                 readyPlayers.Remove(playerId);
@@ -85,6 +83,8 @@ namespace FMServer
 
         public bool SetPlayerCharacter(Guid playerId, Character character)
         {
+            if (IsPlayerReady(playerId))
+                return false;
             if(character == Character.None)
             {
                 playerCharacters.Remove(playerId);
@@ -96,6 +96,11 @@ namespace FMServer
             }
             playerCharacters[playerId] = character;
             return true;
+        }
+
+        public List<object> GetSelected()
+        {
+            return playerCharacters.Select(x=>new { Character = x.Value, Id = x.Key, Ready = IsPlayerReady(x.Key) } as object).ToList();
         }
 
         public int GetCurrentMoveTimer(Character character)
@@ -131,7 +136,7 @@ namespace FMServer
 
         public bool IsCharacterPlaying(Character character)
         {
-            return playerCharacters.Values.Any(c => c != character);
+            return playerCharacters.Values.Any(c => c == character);
         }
 
         public void SetCharacterPosition(Character character, int target)

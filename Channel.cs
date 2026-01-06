@@ -10,7 +10,7 @@ namespace FMServer
         public ClientSession Owner { get; private set; }
         public ChannelState State = ChannelState.Lobby;
         public long CurrentTick { get; private set; } = 0;
-        public bool Running;
+        public bool Running {get; private set; }
         public bool Hidden { get; set; }
 
         public string Password { get; set; } = "";
@@ -33,38 +33,58 @@ namespace FMServer
 
         public void Abort()
         {
-            if (State != ChannelState.Starting)
+            if (State != ChannelState.Lobby)
                 return;
+            IsCountdown = false;
             countdown.Cancel();
-            countdown = new();
-            State = ChannelState.Lobby;
             Broadcast(new
             {
                 type = "game_countdown",
-                countdown = -1
+                value = -1
             });
         }
+
+        private bool IsCountdown { get; set; } = false;
 
         public void Countdown()
         {
             if (State != ChannelState.Lobby)
                 return;
-            State = ChannelState.Starting;
-            Task.Run(() =>
+            countdown = new();
+            // prevent proper countdown for now, need to implement chat first...
+            Broadcast(new
             {
-                int count = 5;
-                while(count > 0 && !countdown.IsCancellationRequested)
+                type = "game_countdown",
+                value = 5
+            });
+            return;
+            IsCountdown = true;
+            Task.Run(async () =>
+            {
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+
+                for (int count = 5; count > 0; count--)
                 {
+                    if (countdown.IsCancellationRequested)
+                        return;
+
                     Broadcast(new
                     {
                         type = "game_countdown",
-                        countdown = count
+                        value = count
                     });
-                    Thread.Sleep(1000);
-                    count--;
+
+                    await timer.WaitForNextTickAsync(countdown.Token);
                 }
-                if(count == 0 && !countdown.IsCancellationRequested)
-                    Start();
+
+                if (!countdown.IsCancellationRequested)
+                {
+                    State = ChannelState.Starting;
+                    Broadcast(new
+                    {
+                        type = "game_start"
+                    });
+                }
             });
         }
 
@@ -72,25 +92,30 @@ namespace FMServer
         {
             if(State != ChannelState.Starting)
                 return;
+            IsCountdown = false;
             foreach (var character in GameState.GetPlayingRobots())
             {
-                int timer = GameState.GetNewMoveTimer(character);
-                GameState.SetCharacterMoveTimer(character, timer);
-                _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Id) == character)?.Send(new
-                {
-                    type = "move_timer",
-                    value = Math.Round(((double)timer) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
-                });
+                GameState.SetCharacterPosition(character, 0);
+                GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
             }
             Broadcast(new
             {
-                type = "game_start"
+                type = "game_start",
+                positions = GameState.GetPlayingRobots().Select(c=>new { character = c, position = GameState.GetCharacterPosition(c) }).ToArray(),
             });
+            foreach (var client in _members.Values.Where(c => GameState.GetPlayingRobots().Contains(GameState.GetPlayerCharacter(c.Id))))
+            {
+                client?.Send(new
+                {
+                    type = "move_timer",
+                    value = Math.Round(((double)GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(client.Id))) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
+                });
+            }
             State = ChannelState.InGame;
             CurrentTick = 0;
             Running = true;
 
-            TickThread = new Thread(() => RunChannelTickLoop());
+            TickThread = new Thread(RunChannelTickLoop);
             TickThread.Start();
         }
 
@@ -604,6 +629,8 @@ namespace FMServer
         public void Join(ClientSession session)
         {
             _members[session.Id] = session;
+            if(IsCountdown)
+                Abort();
         }
 
         public void Leave(ClientSession session)
@@ -618,6 +645,9 @@ namespace FMServer
                     client = Owner.Info
                 });
             }
+            // this order must be maintained or everything breaks
+            GameState.SetPlayerReady(session.Id, false);
+            GameState.SetPlayerCharacter(session.Id, Character.None);
             if(_members.Count <= 1 && Running)
             {
                 Running = false;
