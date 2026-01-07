@@ -33,7 +33,7 @@ namespace FMServer
 
         public void Abort()
         {
-            if (State != ChannelState.Lobby)
+            if (State != ChannelState.Lobby || !IsCountdown)
                 return;
             IsCountdown = false;
             countdown.Cancel();
@@ -44,11 +44,11 @@ namespace FMServer
             });
         }
 
-        private bool IsCountdown { get; set; } = false;
+        public bool IsCountdown { get; private set; } = false;
 
         public void Countdown()
         {
-            if (State != ChannelState.Lobby)
+            if (State != ChannelState.Lobby || IsCountdown)
                 return;
             countdown = new();
             // prevent proper countdown for now, need to implement chat first...
@@ -57,8 +57,8 @@ namespace FMServer
                 type = "game_countdown",
                 value = 5
             });
-            return;
             IsCountdown = true;
+            return;
             Task.Run(async () =>
             {
                 using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -648,7 +648,9 @@ namespace FMServer
             // this order must be maintained or everything breaks
             GameState.SetPlayerReady(session.Id, false);
             GameState.SetPlayerCharacter(session.Id, Character.None);
-            if(_members.Count <= 1 && Running)
+            if (IsCountdown)
+                Abort();
+            if (_members.Count <= 1 && Running)
             {
                 Running = false;
                 State = ChannelState.Lobby;

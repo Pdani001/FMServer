@@ -259,8 +259,10 @@ namespace FMServer
                     break;
 
                 case "chat":
-                    if (!sender.Auth || sender.Session != msg.Session)
+                    if (!sender.Auth || sender.Session != msg.Session || string.IsNullOrEmpty(msg.Text))
                         return;
+                    if (msg.Text.Length >= 256)
+                        msg.Text = msg.Text[..256];
                     senderChannel?.Broadcast(new
                     {
                         type = "chat",
@@ -299,7 +301,7 @@ namespace FMServer
                         return;
                     if(senderChannel.GameState.SetPlayerReady(sender.Id, msg.Value == 1))
                     {
-                        if(senderChannel.State == ChannelState.Starting)
+                        if(senderChannel.IsCountdown)
                             senderChannel.Abort();
                         character = senderChannel.GameState.GetPlayerCharacter(sender.Id);
                         senderChannel.Broadcast(new
