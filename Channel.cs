@@ -51,14 +51,7 @@ namespace FMServer
             if (State != ChannelState.Lobby || IsCountdown)
                 return;
             countdown = new();
-            // prevent proper countdown for now, need to implement chat first...
-            Broadcast(new
-            {
-                type = "game_countdown",
-                value = 5
-            });
             IsCountdown = true;
-            return;
             Task.Run(async () =>
             {
                 using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -76,9 +69,9 @@ namespace FMServer
 
                     await timer.WaitForNextTickAsync(countdown.Token);
                 }
-
                 if (!countdown.IsCancellationRequested)
                 {
+                    GameState.ResetReadyPlayers();
                     State = ChannelState.Starting;
                     Broadcast(new
                     {
@@ -119,7 +112,6 @@ namespace FMServer
             TickThread.Start();
         }
 
-        List<long> lag = new(5);
 
         private void RunChannelTickLoop()
         {
@@ -132,8 +124,6 @@ namespace FMServer
 
                 if (elapsed >= nextTickMs)
                 {
-                    lag = lag[1..lag.Capacity];
-                    lag.Add(nextTickMs/elapsed);
                     Tick();
                     nextTickMs += GameServer.TICK_INTERVAL_MS;
                 }
@@ -147,11 +137,6 @@ namespace FMServer
         private void Tick()
         {
             CurrentTick++;
-            
-            if(CurrentTick % (GameServer.TICK_RATE * lag.Capacity) == 0)
-            {
-                Console.WriteLine($"[{Name}:{DateTime.Now}] Current tick rate: {lag.Average()}");
-            }
 
             ProcessInputs();
             UpdateLogic();
@@ -177,6 +162,12 @@ namespace FMServer
                     GameState.NightTime += 1;
                 }
                 lastNightTimeUpdateTick = CurrentTick;
+                if(GameState.NightTime == 6)
+                {
+                    State = ChannelState.Finished;
+                    Running = false;
+                    return;
+                }
             }
             if (GameState.Power > 0 && CurrentTick - lastPowerUpdateTick >= GameServer.TICK_RATE)
             {
@@ -192,7 +183,7 @@ namespace FMServer
                 GameState.Power -= usage;
                 lastPowerUpdateTick = CurrentTick;
             }
-            if (CurrentTick - startCameraGarbleTick >= GameServer.TICK_RATE * 3)
+            if (GameState.CameraGarble && CurrentTick - startCameraGarbleTick >= GameServer.TICK_RATE * 3)
             {
                 GameState.CameraGarble = false;
             }
@@ -218,7 +209,6 @@ namespace FMServer
                             {
                                 lastMusicBoxTryTick = CurrentTick;
                                 MusicBoxTry++;
-                                Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
                                 if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
                                 {
                                     MusicBoxTry = 0;
@@ -249,28 +239,21 @@ namespace FMServer
                             {
                                 lastMusicBoxTryTick = CurrentTick;
                                 MusicBoxTry++;
-                                Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
-                                if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
+                                if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 10)
                                 {
                                     MusicBoxTry = 0;
                                     GameState.Musicbox++;
+                                    Running = false;
+                                    State = ChannelState.Finished;
+                                    GameState.Jumpscared = Character.Freddy;
+                                    Broadcast(new
+                                    {
+                                        type = "musicbox",
+                                        value = GameState.Musicbox
+                                    });
                                 }
                             }
                             break;
-                    }
-                    if(GameState.Musicbox < 3)
-                    {
-                        if(CurrentTick - lastMusicBoxTryTick >= GameServer.TICK_RATE * 5)
-                        {
-                            lastMusicBoxTryTick = CurrentTick;
-                            MusicBoxTry++;
-                            Debug.WriteLine($"Music Box State: {GameState.Musicbox}, Try: {MusicBoxTry}");
-                            if (GameServer.RNG.Next(5) + 1 == 1 || MusicBoxTry == 4)
-                            {
-                                MusicBoxTry = 0;
-                                GameState.Musicbox++;
-                            }
-                        }
                     }
                 }
                 return;
@@ -381,6 +364,17 @@ namespace FMServer
             Message msg = input.Message;
             switch (msg.Type)
             {
+                case "cheat#power":
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || !input.Client.IsAdmin || GameState.Power <= 30)
+                        return;
+                    GameState.Power = 30;
+                    break;
+                case "cheat#time":
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || !input.Client.IsAdmin || GameState.NightTime >= 5)
+                        return;
+                    GameState.NightTime = 5;
+                    lastNightTimeUpdateTick = CurrentTick - (GameServer.TICK_RATE * 80);
+                    break;
                 case "door":
                     if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
                         return;
@@ -418,6 +412,11 @@ namespace FMServer
                     if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0)
                         return;
                     GameState.CameraActive = msg.Value == 1;
+                    if (GameState.CameraActive)
+                    {
+                        GameState.LeftLight = false;
+                        GameState.RightLight = false;
+                    }
                     break;
                 case "move":
                     var movechar = GameState.GetPlayerCharacter(input.Client.Id);
@@ -558,6 +557,8 @@ namespace FMServer
 
         void CheckCameraGarble(int oldPos, int target)
         {
+            if (!GameState.CameraActive)
+                return;
             int guardPos = GameState.GetCharacterPosition(Character.Guard);
             if ((target == guardPos || oldPos == guardPos) && !GameState.CameraGarble)
             {
@@ -646,14 +647,16 @@ namespace FMServer
                 });
             }
             // this order must be maintained or everything breaks
+            Character character = GameState.GetPlayerCharacter(session.Id);
             GameState.SetPlayerReady(session.Id, false);
             GameState.SetPlayerCharacter(session.Id, Character.None);
             if (IsCountdown)
                 Abort();
-            if (_members.Count <= 1 && Running)
+            if ((_members.Count <= 1 || character == Character.Guard) && Running)
             {
                 Running = false;
                 State = ChannelState.Lobby;
+                GameState = new();
                 CurrentTick = 0;
                 Broadcast(new
                 {

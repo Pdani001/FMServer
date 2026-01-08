@@ -38,7 +38,7 @@ namespace FMServer
             get => _power;
             set
             {
-                _power -= value;
+                _power = value;
                 if (_power < 0)
                 {
                     _power = 0;

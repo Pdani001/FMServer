@@ -74,14 +74,18 @@ namespace FMServer
                 if (_buffer.Length < length + 4)
                     return;
 
-                var jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
+                var jsonBytes = Span<byte>.Empty;
                 try {
+                    jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
                     var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions)!;
                     Server.HandleMessage(this, msg);
                 }
                 catch (JsonException) 
                 {
-                    Console.WriteLine("Failed to deserialize message: " + Encoding.UTF8.GetString(jsonBytes));
+                    if(!jsonBytes.IsEmpty)
+                        Console.WriteLine("Failed to deserialize message: " + Encoding.UTF8.GetString(jsonBytes));
+                    else
+                        Console.WriteLine("Invalid message received!");
                 }
 
                 var remaining = _buffer.Length - (length + 4);
