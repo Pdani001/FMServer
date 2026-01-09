@@ -5,6 +5,7 @@
         Lobby,
         Starting,
         InGame,
-        Finished
+        Finished,
+        Disposing
     }
 }

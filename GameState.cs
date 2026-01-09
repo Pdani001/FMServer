@@ -45,8 +45,9 @@ namespace FMServer
                 }
             }
         }
-        public bool PowerDown { get; set; }
+        public bool PowerDown { get; set; } = false;
         public Character Jumpscared { get; set; } = Character.None;
+        public bool ActiveJumpscare { get; set; } = false;
 
         public bool BlockRight { get; set; } = false;
         public bool RightDoor { get; set; } = false;

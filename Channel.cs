@@ -1,11 +1,16 @@
-﻿using System.Collections.Concurrent;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
 namespace FMServer
 {
-    public class Channel
+    public class Channel : IDisposable
     {
+        ~Channel()
+        {
+            Console.WriteLine($"Channel {Name} finalized");
+        }
         public string Name { get; }
         public ClientSession Owner { get; private set; }
         public ChannelState State = ChannelState.Lobby;
@@ -129,7 +134,11 @@ namespace FMServer
                 }
                 else
                 {
-                    Thread.Sleep(1);
+                    long sleepMs = nextTickMs - elapsed;
+                    if (sleepMs > 1)
+                        Thread.Sleep((int)Math.Min(sleepMs, 5));
+                    else
+                        Thread.Sleep(1);
                 }
             }
         }
@@ -148,6 +157,10 @@ namespace FMServer
         private long startCameraGarbleTick = 0;
         private long lastMusicBoxTryTick = 0;
         private short MusicBoxTry = 0;
+
+        private long ForceJumpscareTick = 0;
+        private long FreddyJumpscareTick = 0;
+        private long StartJumpscareTick = 0;
 
         private void UpdateLogic()
         {
@@ -270,7 +283,7 @@ namespace FMServer
                 });
             }
             int guardPos = GameState.GetCharacterPosition(Character.Guard);
-            foreach (Character character in GameState.GetPlayingRobots().Where(c=>c!=Character.Freddy).OrderBy(GameState.GetRobotAttack))
+            foreach (Character character in GameState.GetPlayingRobots().Where(c=>c!=Character.Freddy && GameState.GetRobotAttack(c) > 0).OrderBy(GameState.GetRobotAttack))
             {
                 int position = GameState.GetCharacterPosition(character);
                 long attackTick = GameState.GetRobotAttack(character);
@@ -297,6 +310,7 @@ namespace FMServer
                         }
                         else if (position == 4 && attackTick <= CurrentTick)
                         {
+                            GameState.SetRobotAttack(character, 0);
                             if (GameState.LeftDoor)
                             {
                                 GameState.Power -= 10 + GameState.FoxyAttempt * 13;
@@ -310,6 +324,7 @@ namespace FMServer
                                     value = newpos
                                 });
                                 CheckCameraGarble(3, 2);
+                                GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
                                 return;
                             }
                             GameState.Jumpscared = character;
@@ -348,14 +363,55 @@ namespace FMServer
                         }
                         break;
                 }
+                if(newpos == 1)
+                {
+                    GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
+                }
                 CheckCameraGarble(position, newpos);
                 GameState.SetCharacterPosition(character, newpos);
+                GameState.SetRobotAttack(character, 0);
                 Broadcast(new
                 {
                     type = "move",
                     character,
                     value = newpos
                 });
+            }
+            if(GameState.Jumpscared != Character.None)
+            {
+                if (!GameState.ActiveJumpscare)
+                {
+                    if (GameState.Jumpscared == Character.Freddy && !GameState.CameraActive && FreddyJumpscareTick == 0)
+                    {
+                        FreddyJumpscareTick = CurrentTick + (GameServer.TICK_RATE * 5);
+                    }
+                    if(GameState.CameraActive && ForceJumpscareTick == 0)
+                    {
+                        ForceJumpscareTick = CurrentTick + (GameServer.TICK_RATE * 15);
+                    }
+                    if((FreddyJumpscareTick != 0 && FreddyJumpscareTick <= CurrentTick) || (ForceJumpscareTick != 0 && ForceJumpscareTick <= CurrentTick) || GameState.Jumpscared == Character.Foxy)
+                    {
+                        StartJumpscareTick = CurrentTick;
+                        GameState.ActiveJumpscare = true;
+                        Broadcast(new
+                        {
+                            type = "jumpscare",
+                            character = GameState.Jumpscared
+                        });
+                    }
+                }
+                else
+                {
+                    if(CurrentTick - StartJumpscareTick >= GameServer.TICK_RATE)
+                    {
+                        State = ChannelState.Finished;
+                        Running = false;
+                        Broadcast(new
+                        {
+                            type = "end_jumpscare"
+                        });
+                    }
+                }
             }
         }
 
@@ -374,6 +430,11 @@ namespace FMServer
                         return;
                     GameState.NightTime = 5;
                     lastNightTimeUpdateTick = CurrentTick - (GameServer.TICK_RATE * 80);
+                    break;
+                case "cheat#move":
+                    if (GameState.GetPlayerCharacter(input.Client.Id) == Character.Guard || !input.Client.IsAdmin || GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(input.Client.Id)) <= 1)
+                        return;
+                    GameState.SetCharacterMoveTimer(GameState.GetPlayerCharacter(input.Client.Id), 1);
                     break;
                 case "door":
                     if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
@@ -409,13 +470,23 @@ namespace FMServer
                     }
                     break;
                 case "camera":
-                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.PowerDown || GameState.ActiveJumpscare)
                         return;
                     GameState.CameraActive = msg.Value == 1;
                     if (GameState.CameraActive)
                     {
                         GameState.LeftLight = false;
                         GameState.RightLight = false;
+                    }
+                    else if(GameState.Jumpscared != Character.None)
+                    {
+                        StartJumpscareTick = CurrentTick;
+                        GameState.ActiveJumpscare = true;
+                        Broadcast(new
+                        {
+                            type = "jumpscare",
+                            character = GameState.Jumpscared
+                        });
                     }
                     break;
                 case "move":
@@ -529,6 +600,7 @@ namespace FMServer
                             if (GameState.RightDoor)
                             {
                                 target = 1;
+                                GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
                             }
                             else
                                 GameState.Jumpscared = movechar;
@@ -658,6 +730,7 @@ namespace FMServer
                 State = ChannelState.Lobby;
                 GameState = new();
                 CurrentTick = 0;
+                InputQueue.Clear();
                 Broadcast(new
                 {
                     type = "game_abort"
@@ -671,6 +744,41 @@ namespace FMServer
         internal List<object> GetMembers()
         {
             return _members.Values.Select(c => c.Info).ToList();
+        }
+
+        public void Dispose()
+        {
+            // Prevent double disposal
+            if (State == ChannelState.Disposing)
+                return;
+
+            Console.WriteLine($"[DISPOSE] Channel {Name}");
+
+            State = ChannelState.Disposing;
+
+            // Stop countdown
+            IsCountdown = false;
+            countdown.Cancel();
+
+            // Stop tick loop
+            Running = false;
+
+            if (TickThread != null)
+            {
+                TickThread.Join();
+                TickThread = null;
+            }
+
+            // Detach players
+            foreach (var member in _members.Values)
+            {
+                member.CurrentChannel = null;
+            }
+
+            _members.Clear();
+            InputQueue.Clear();
+
+            GameState = null!;
         }
     }
 }

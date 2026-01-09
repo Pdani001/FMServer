@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 
 namespace FMServer
 {
-    class GameServer(IPAddress address, int port) : TcpServer(address, port)
+    public class GameServer(IPAddress address, int port) : TcpServer(address, port)
     {
         static GameServer()
         {
@@ -21,16 +21,16 @@ namespace FMServer
         }
         public static readonly int TICK_RATE = 10;
         public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
-        public const int PROTOCOL_VERSION = 1;
+        public const int PROTOCOL_VERSION = 2;
 
-        private ConcurrentDictionary<Guid, ClientSession> _clients = new();
-        private ConcurrentDictionary<string, Channel> _channels = new();
+        private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
+        private readonly ConcurrentDictionary<string, Channel> _channels = new();
 
         public string ServerSecret { get; set; } = "";
 
         private readonly string ClientSecret = "[9edp!J3qWd4)XWtW#sa@s@>PJaXEW]Ns0FzYi5{WEA4pfCjgbeEU3+exR)+ww2(";
 
-        private Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
+        private readonly Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
         public string AdminName { get; set; } = "";
 
@@ -402,9 +402,16 @@ namespace FMServer
             });
 
             if (ch.IsEmpty)
+            {
+                ch.Dispose();
                 _channels.TryRemove(ch.Name, out _);
+            }
 
             client.CurrentChannel = null;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
         }
 
         protected override void OnError(SocketError error)

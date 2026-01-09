@@ -5,8 +5,19 @@ using System.Text.Json;
 
 namespace FMServer
 {
-    public class ClientSession(TcpServer server) : TcpSession(server)
+    public class ClientSession : TcpSession
     {
+        ~ClientSession()
+        {
+            Console.WriteLine($"ClientSession {Id} finalized");
+        }
+        private readonly GameServer _server;
+
+        public ClientSession(GameServer server) : base(server)
+        {
+            _server = server;
+        }
+
         public new Guid Id { get; } = Guid.NewGuid();
         public string Nick { get; set; } = "";
 
@@ -33,8 +44,6 @@ namespace FMServer
 
         public readonly CancellationTokenSource source = new();
 
-        private new GameServer Server => (GameServer)server;
-
         public Character Character { get; set; } = Character.None;
 
         protected override void OnConnected()
@@ -50,8 +59,10 @@ namespace FMServer
 
         protected override void OnDisconnected()
         {
-            Server.LeaveChannel(this);
-            Server.RemoveClient(this);
+            _server.LeaveChannel(this);
+            _server.RemoveClient(this);
+            source.Cancel();
+            _buffer.Dispose();
         }
 
         private static JsonSerializerOptions JsonSerializerOptions => new()
@@ -78,7 +89,7 @@ namespace FMServer
                 try {
                     jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
                     var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions)!;
-                    Server.HandleMessage(this, msg);
+                    _server.HandleMessage(this, msg);
                 }
                 catch (JsonException) 
                 {
