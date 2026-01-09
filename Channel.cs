@@ -421,18 +421,18 @@ namespace FMServer
             switch (msg.Type)
             {
                 case "cheat#power":
-                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || !input.Client.IsAdmin || GameState.Power <= 30)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 30)
                         return;
                     GameState.Power = 30;
                     break;
                 case "cheat#time":
-                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || !input.Client.IsAdmin || GameState.NightTime >= 5)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.NightTime >= 5)
                         return;
                     GameState.NightTime = 5;
                     lastNightTimeUpdateTick = CurrentTick - (GameServer.TICK_RATE * 80);
                     break;
                 case "cheat#move":
-                    if (GameState.GetPlayerCharacter(input.Client.Id) == Character.Guard || !input.Client.IsAdmin || GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(input.Client.Id)) <= 1)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) == Character.Guard || GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(input.Client.Id)) <= 1)
                         return;
                     GameState.SetCharacterMoveTimer(GameState.GetPlayerCharacter(input.Client.Id), 1);
                     break;
