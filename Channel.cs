@@ -78,6 +78,7 @@ namespace FMServer
                 {
                     GameState.ResetReadyPlayers();
                     State = ChannelState.Starting;
+                    IsCountdown = false;
                     Broadcast(new
                     {
                         type = "game_start"
@@ -327,6 +328,7 @@ namespace FMServer
                                 GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
                                 return;
                             }
+                            GameState.BlockLeft = true;
                             GameState.Jumpscared = character;
                             GameState.SetCharacterPosition(character, newpos);
                             Broadcast(new
@@ -348,6 +350,7 @@ namespace FMServer
                         {
                             newpos = 22;
                             GameState.Jumpscared = character;
+                            GameState.BlockLeft = true;
                         }
                         break;
                     case Character.Chica:
@@ -360,6 +363,7 @@ namespace FMServer
                         {
                             newpos = 22;
                             GameState.Jumpscared = character;
+                            GameState.BlockRight = true;
                         }
                         break;
                 }
@@ -591,32 +595,36 @@ namespace FMServer
                     movechar = GameState.GetPlayerCharacter(input.Client.Id);
                     if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCurrentMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
                         return;
-                    int position = GameState.GetCharacterPosition(movechar);
+                    oldPos = GameState.GetCharacterPosition(movechar);
                     target = 21;
                     switch (movechar)
                     {
                         case Character.Freddy:
-                            if(position != 7) return;
+                            if(oldPos != 7) return;
                             if (GameState.RightDoor)
                             {
                                 target = 1;
                                 GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
                             }
                             else
+                            {
+                                GameState.BlockRight = true;
                                 GameState.Jumpscared = movechar;
+                            }
                             GameState.SetCharacterPosition(movechar, target);
                             break;
                         case Character.Chica:
-                            if (position != 7 || GameState.GetRobotAttack(Character.Bonnie) > CurrentTick) return;
+                            if (oldPos != 7 || GameState.GetRobotAttack(Character.Bonnie) > CurrentTick) return;
                             GameState.SetCharacterPosition(movechar, target);
                             GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
                             break;
                         case Character.Bonnie:
-                            if (position != 4 || GameState.GetRobotAttack(Character.Chica) > CurrentTick) return;
+                            if (oldPos != 4 || GameState.GetRobotAttack(Character.Chica) > CurrentTick) return;
                             GameState.SetCharacterPosition(movechar, target);
                             GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
                             break;
                     }
+                    CheckCameraGarble(oldPos, target);
                     Broadcast(new
                     {
                         type = "move",
@@ -724,7 +732,7 @@ namespace FMServer
             GameState.SetPlayerCharacter(session.Id, Character.None);
             if (IsCountdown)
                 Abort();
-            if ((_members.Count <= 1 || character == Character.Guard) && Running)
+            if ((_members.Count <= 1 || character == Character.Guard) && (Running || State == ChannelState.Starting))
             {
                 Running = false;
                 State = ChannelState.Lobby;
