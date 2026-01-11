@@ -651,13 +651,11 @@ namespace FMServer
         {
             while (InputQueue.TryPeek(out var input))
             {
-                // Too early → wait
                 if (input.ClientTick > CurrentTick)
                     break;
 
                 InputQueue.TryDequeue(out input);
 
-                // Too late → discard
                 if (input!.ClientTick < CurrentTick - 5)
                     continue;
 
@@ -684,12 +682,7 @@ namespace FMServer
 
             long delta = clientTick.Value - CurrentTick;
 
-            // Too far in the future → cheating or broken client
-            if (delta > 2)
-                return false;
-
-            // Too far in the past → replay or lag exploit
-            if (delta < -5)
+            if (delta < -5 || delta > 2)
                 return false;
 
             return true;
