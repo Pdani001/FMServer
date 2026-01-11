@@ -91,7 +91,7 @@ namespace FMServer
                     var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions)!;
                     _server.HandleMessage(this, msg);
                 }
-                catch (JsonException) 
+                catch (Exception) 
                 {
                     if(!jsonBytes.IsEmpty)
                         Console.WriteLine("Failed to deserialize message: " + Encoding.UTF8.GetString(jsonBytes));
