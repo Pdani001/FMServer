@@ -300,7 +300,13 @@ namespace FMServer
                                 return;
                             }
                             if (guardPos == 3 && GameState.CameraActive)
+                            {
+                                Broadcast(new
+                                {
+                                    type = "foxy_run"
+                                });
                                 GameState.SetRobotAttack(character, CurrentTick + (long)Math.Round(GameServer.TICK_RATE * 1.7d, MidpointRounding.AwayFromZero));
+                            }
                             GameState.SetCharacterPosition(character, 4);
                             Broadcast(new
                             {
@@ -329,6 +335,7 @@ namespace FMServer
                                 return;
                             }
                             GameState.BlockLeft = true;
+                            GameState.LeftLight = false;
                             GameState.Jumpscared = character;
                             GameState.SetCharacterPosition(character, newpos);
                             Broadcast(new
@@ -341,7 +348,6 @@ namespace FMServer
                         }
                         return;
                     case Character.Bonnie:
-                        newpos = 1;
                         if (attackTick > CurrentTick)
                         {
                             return;
@@ -354,7 +360,6 @@ namespace FMServer
                         }
                         break;
                     case Character.Chica:
-                        newpos = 1;
                         if (attackTick > CurrentTick)
                         {
                             return;
@@ -504,6 +509,8 @@ namespace FMServer
                     }
                     if (movechar == Character.Guard)
                     {
+                        if(target > 10)
+                            target = 10;
                         GameState.CameraActive = true;
                         GameState.SetCharacterPosition(movechar, target);
                         return;
@@ -545,6 +552,8 @@ namespace FMServer
                             }
                             break;
                         case Character.Foxy:
+                            if(target == 2)
+                                target = oldPos + 1;
                             switch (target)
                             {
                                 case 3:

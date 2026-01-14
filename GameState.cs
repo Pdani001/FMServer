@@ -211,7 +211,7 @@ namespace FMServer
                 },
                 Character.Foxy => current switch
                 {
-                    0 => position == 1,
+                    0 => position == 2,
                     1 => position == 2,
                     2 => position == 3,
                     _ => false

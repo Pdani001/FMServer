@@ -21,14 +21,14 @@ namespace FMServer
         }
         public static readonly int TICK_RATE = 10;
         public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
-        public const int PROTOCOL_VERSION = 2;
+        public const int PROTOCOL_VERSION = 3;
 
         private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private readonly ConcurrentDictionary<string, Channel> _channels = new();
 
         public string ServerSecret { get; set; } = "";
 
-        private readonly string ClientSecret = "[9edp!J3qWd4)XWtW#sa@s@>PJaXEW]Ns0FzYi5{WEA4pfCjgbeEU3+exR)+ww2(";
+        private readonly string ClientHash = "[9edp!J3qWd4)XWtW#sa@s@>PJaXEW]Ns0FzYi5{WEA4pfCjgbeEU3+exR)+ww2(";
 
         private readonly Regex nameRegex = new("^[a-zA-Z0-9_]{3,24}$");
 
@@ -118,7 +118,7 @@ namespace FMServer
                     bool valid = false;
                     using (SHA256 sha256Hash = SHA256.Create())
                     {
-                        var source = sender.Nonce + ClientSecret;
+                        var source = sender.Nonce + ClientHash;
                         valid = VerifyHash(sha256Hash, source, msg.Text ?? "");
                     }
                     if (valid)
