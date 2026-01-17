@@ -249,7 +249,7 @@ namespace FMServer
                         channel = CreateChannel(sender, msg.Channel, msg.Hidden ?? false);
                     }
                     sender.Nick = msg.Nick;
-                    JoinChannel(sender, channel);
+                    JoinChannel(sender, channel, msg.Text ?? "");
                     break;
 
                 case "leave_channel":
