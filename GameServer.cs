@@ -21,7 +21,7 @@ namespace FMServer
         }
         public static readonly int TICK_RATE = 10;
         public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
-        public const int PROTOCOL_VERSION = 3;
+        public const int PROTOCOL_VERSION = 4;
 
         private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private readonly ConcurrentDictionary<string, Channel> _channels = new();
@@ -45,6 +45,7 @@ namespace FMServer
 
         protected override void OnStarted()
         {
+            Console.WriteLine($"[{DateTime.Now}] Running protocol version "+PROTOCOL_VERSION);
             if(ServerSecret == "")
             {
                 ServerSecret = StringExt.RandomString(32);
@@ -55,6 +56,7 @@ namespace FMServer
         public void RemoveClient(ClientSession client)
         {
             _clients.TryRemove(client.Id, out _);
+            client.Dispose();
         }
 
         public Channel CreateChannel(ClientSession owner, string name, bool? hidden = false)
@@ -263,6 +265,12 @@ namespace FMServer
                         return;
                     if (msg.Text.Length >= 256)
                         msg.Text = msg.Text[..256];
+                    if (msg.Text.StartsWith('/'))
+                    {
+                        var args = msg.Text[1..].Split(' ');
+                        senderChannel?.HandleCommand(this, sender, args[0], args[1..]);
+                        return;
+                    }
                     senderChannel?.Broadcast(new
                     {
                         type = "chat",

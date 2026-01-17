@@ -11,7 +11,7 @@ namespace FMServer
         {
             Console.WriteLine($"ClientSession {Id} finalized");
         }
-        private readonly GameServer _server;
+        private GameServer _server;
 
         public ClientSession(GameServer server) : base(server)
         {
@@ -48,13 +48,16 @@ namespace FMServer
 
         protected override void OnConnected()
         {
-            Task.Delay(5000).WaitAsync(source.Token).ContinueWith(_ =>
-            {
-                if (!Auth)
-                    Disconnect();
-                else
-                    Send(new { type = "connected" });
-            });
+            Task.Delay(5000).WaitAsync(source.Token).ContinueWith(FinishConnect);
+        }
+
+        private void FinishConnect(Task task)
+        {
+            if (!Auth)
+                Disconnect();
+            else
+                Send(new { type = "connected" });
+            task.Dispose();
         }
 
         protected override void OnDisconnected()
@@ -63,6 +66,8 @@ namespace FMServer
             _server.RemoveClient(this);
             source.Cancel();
             _buffer.Dispose();
+            _server = null!;
+            CurrentChannel = null;
         }
 
         private static JsonSerializerOptions JsonSerializerOptions => new()

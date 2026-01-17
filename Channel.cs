@@ -697,6 +697,85 @@ namespace FMServer
             return true;
         }
 
+        readonly object ServerClient = new
+        {
+            id = Guid.Empty,
+            nick = "FMServer"
+        };
+
+        public void HandleCommand(GameServer server, ClientSession sender, string command, string[] args)
+        {
+            var text = "";
+            switch (command)
+            {
+                case "help":
+                    text = "Available commands:"
+                        + "\n- /help - View this list"
+                        + "\n- /list - List all players";
+                    if (IsOwner(sender))
+                    {
+                        text += "\n- /pw [password] - Sets or unsets the lobby password"
+                            + "\n- /kick <nick> - Kicks the first player with the given nickname";
+                    }
+                    break;
+                case "list":
+                    text = $"Currently playing ({_members.Count}/5):"
+                        + "\n"
+                        + string.Join("\n",_members.Select(kvp=>$"- {kvp.Value.Nick}"+(kvp.Key == sender.Id ? " (you)" : IsOwner(kvp.Value) ? " (owner)" : "")));
+                    break;
+                case "pw":
+                    if (!IsOwner(sender))
+                        break;
+                    if(args.Length == 0)
+                    {
+                        if(Password != "")
+                        {
+                            Password = "";
+                            text = "Lobby password removed.";
+                        }
+                        else
+                        {
+                            text = "Usage: /pw [password]";
+                        }
+                        break;
+                    }
+                    Password = string.Join(' ', args);
+                    text = "Lobby password set.";
+                    break;
+                case "kick":
+                    if (!IsOwner(sender))
+                        break;
+                    if (args.Length == 0)
+                    {
+                        text = "Usage: /kick <nick>";
+                        break;
+                    }
+                    var search = _members.Where(m => m.Value.Nick == args[0]);
+                    if (search.Any())
+                    {
+                        int index = search.First().Key == sender.Id ? 1 : 0;
+                        if(index >= search.Count())
+                        {
+                            text = "You can't kick yourself.";
+                            break;
+                        }
+                        server.LeaveChannel(search.ElementAt(index).Value);
+                        text = "Kicked player.";
+                        break;
+                    }
+                    text = "No player found with the given nick.";
+                    break;
+            }
+            if(text != "")
+                sender.Send(new
+                {
+                    type = "chat",
+                    client = ServerClient,
+                    text,
+                    isadmin = true
+                });
+        }
+
         public void Broadcast(object json)
         {
             foreach (var m in _members.Values)
@@ -749,7 +828,7 @@ namespace FMServer
         }
         public bool IsPasswordProtected => !string.IsNullOrEmpty(Password);
         public bool IsEmpty => _members.IsEmpty;
-        public bool IsOwner(ClientSession s) => s.Id == Owner.Id;
+        public bool IsOwner(ClientSession s) => Owner != null && s.Id == Owner.Id;
 
         internal List<object> GetMembers()
         {
@@ -787,6 +866,7 @@ namespace FMServer
 
             _members.Clear();
             InputQueue.Clear();
+            Owner = null!;
 
             GameState = null!;
         }

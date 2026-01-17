@@ -20,7 +20,7 @@ class Program
         };
         if (server.Start())
         {
-            Console.WriteLine($"[{DateTime.Now}]Server running on port {server.Port}");
+            Console.WriteLine($"[{DateTime.Now}] Listening on port {server.Port}");
             Console.ReadLine();
             server.Stop();
         }
