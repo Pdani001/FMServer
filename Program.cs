@@ -21,12 +21,23 @@ class Program
         if (server.Start())
         {
             Console.WriteLine($"[{DateTime.Now}] Listening on port {server.Port}");
-            Console.ReadLine();
+            bool stop = false;
+            while (true)
+            {
+                string? text = Console.ReadLine()?.ToLower();
+                if ((text == "stop" && !server.ChannelInGame) || (text == "yes" && stop))
+                    break;
+                if (text == "stop" && server.ChannelInGame)
+                {
+                    Console.WriteLine("There is one or more lobbies in-game, if you are sure you want to stop the server, type in 'yes'");
+                    stop = true;
+                }
+            }
             server.Stop();
         }
         else
         {
-            Console.WriteLine("Failed to start server.");
+            Console.WriteLine("Failed to start server. Is the port available?");
             Console.ReadLine();
         }
     }

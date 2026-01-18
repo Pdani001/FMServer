@@ -26,6 +26,8 @@ namespace FMServer
         private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private readonly ConcurrentDictionary<string, Channel> _channels = new();
 
+        public bool ChannelInGame => _channels.Where(kvp=>kvp.Value.State!=ChannelState.Lobby).Any();
+
         public string ServerSecret { get; set; } = "";
 
         private readonly string ClientHash = "[9edp!J3qWd4)XWtW#sa@s@>PJaXEW]Ns0FzYi5{WEA4pfCjgbeEU3+exR)+ww2(";
@@ -84,6 +86,12 @@ namespace FMServer
                     }
                     return;
                 }
+                if(msg.Type == "ping")
+                {
+                    sender.IsAlive = true;
+                    sender.LastAlive = 0;
+                    return;
+                }
                 // Gameplay input
                 if (!senderChannel.ValidateClientTick(msg.Tick))
                     return;
@@ -98,6 +106,10 @@ namespace FMServer
             }
             switch (msg.Type)
             {
+                case "ping":
+                    sender.IsAlive = true;
+                    sender.LastAlive = 0;
+                    break;
                 case "hello":
                     if (sender.Auth)
                         return;
@@ -137,7 +149,7 @@ namespace FMServer
                         sender.Send(new
                         {
                             type = "error",
-                            error = "Invalid secret."
+                            error = "Invalid response hash. (Are you using a modified client?)"
                         });
                     }
                     sender.source.Cancel();
@@ -197,6 +209,7 @@ namespace FMServer
                             name = c.Name,
                             owner = c.Owner.Id,
                             clients = c.IsEmpty ? [] : c.GetMembers(),
+                            maxplayers = c.MaxPlayers,
                             password = c.IsPasswordProtected
                         }).ToArray();
                     sender.Send(new
@@ -359,7 +372,7 @@ namespace FMServer
                 });
                 return;
             }
-            if(channel.GetMembers().Count == 5)
+            if(channel.GetMembers().Count == channel.MaxPlayers)
             {
                 client.Send(new
                 {
@@ -379,6 +392,7 @@ namespace FMServer
                     name = channel.Name,
                     owner = channel.Owner.Id,
                     clients = channel.IsEmpty ? [] : channel.GetMembers(),
+                    maxplayers = channel.MaxPlayers,
                     password = channel.IsPasswordProtected
                 },
             });
@@ -390,7 +404,7 @@ namespace FMServer
             });
         }
 
-        public void LeaveChannel(ClientSession client)
+        public void LeaveChannel(ClientSession client, string reason = "")
         {
             var ch = client.CurrentChannel;
             if (ch == null) return;
@@ -404,7 +418,8 @@ namespace FMServer
             ch.Broadcast(new
             {
                 type = "channel_user_left",
-                client = client.Info
+                client = client.Info,
+                text = reason
             });
 
             if (ch.IsEmpty)

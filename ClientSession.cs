@@ -35,14 +35,17 @@ namespace FMServer
         
         public bool IsAdmin { get; set; } = false;
 
-        public bool Auth { get; set; }
+        public bool Auth { get; set; } = false;
 
-        public string Nonce { get; } = Guid.NewGuid().ToString();
+        public string Nonce { get; } = StringExt.RandomString(24);
         public string Session => Id.ToString();
 
         private readonly MemoryStream _buffer = new();
 
         public readonly CancellationTokenSource source = new();
+        public readonly CancellationTokenSource ping = new();
+        public bool IsAlive { get; set; } = true;
+        public int LastAlive { get; set; } = 0;
 
         public Character Character { get; set; } = Character.None;
 
@@ -56,15 +59,41 @@ namespace FMServer
             if (!Auth)
                 Disconnect();
             else
+            {
                 Send(new { type = "connected" });
+                Task.Run(async () =>
+                {
+                    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+                    while (!ping.IsCancellationRequested)
+                    {
+                        await timer.WaitForNextTickAsync(ping.Token);
+                        if (ping.IsCancellationRequested)
+                            break;
+                        if (LastAlive >= 5)
+                        {
+                            ping.Cancel();
+                            break;
+                        }
+                        if (!IsAlive)
+                            LastAlive++;
+                        IsAlive = false;
+                        Send(new { type = "ping" });
+                    }
+                    if (ping.IsCancellationRequested)
+                    {
+                        Disconnect();
+                    }
+                });
+            }
             task.Dispose();
         }
 
         protected override void OnDisconnected()
         {
-            _server.LeaveChannel(this);
+            _server.LeaveChannel(this, ping.IsCancellationRequested ? "Timed out" : "");
             _server.RemoveClient(this);
             source.Cancel();
+            ping.Cancel();
             _buffer.Dispose();
             _server = null!;
             CurrentChannel = null;

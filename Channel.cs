@@ -20,6 +20,7 @@ namespace FMServer
 
         public string Password { get; set; } = "";
 
+        public int MaxPlayers { get; set; } = 5;
         private ConcurrentDictionary<Guid, ClientSession> _members = new();
         public readonly ConcurrentQueue<QueuedInput> InputQueue = new();
         private Thread? TickThread;
@@ -516,6 +517,7 @@ namespace FMServer
                         return;
                     }
                     int oldPos = GameState.GetCharacterPosition(movechar);
+                    bool update = true;
                     switch (movechar)
                     {
                         case Character.Freddy:
@@ -560,6 +562,7 @@ namespace FMServer
                                     if (GameState.GetCharacterPosition(Character.Bonnie) == 3 || GameState.GetCharacterPosition(Character.Bonnie) >= 21)
                                         return;
                                     GameState.SetRobotAttack(Character.Foxy, CurrentTick + GameServer.TICK_RATE * 10);
+                                    update = false;
                                     break;
                                 default:
                                     GameState.SetRobotAttack(Character.Foxy, 0);
@@ -567,7 +570,8 @@ namespace FMServer
                             }
                             break;
                     }
-                    GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
+                    if(update)
+                        GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
                     GameState.SetCharacterPosition(movechar, target);
                     Broadcast(new
                     {
@@ -719,7 +723,7 @@ namespace FMServer
                     }
                     break;
                 case "list":
-                    text = $"Currently playing ({_members.Count}/5):"
+                    text = $"Currently playing ({_members.Count}/{MaxPlayers}):"
                         + "\n"
                         + string.Join("\n",_members.Select(kvp=>$"- {kvp.Value.Nick}"+(kvp.Key == sender.Id ? " (you)" : IsOwner(kvp.Value) ? " (owner)" : "")));
                     break;
@@ -759,8 +763,8 @@ namespace FMServer
                             text = "You can't kick yourself.";
                             break;
                         }
-                        server.LeaveChannel(search.ElementAt(index).Value);
-                        text = "Kicked player.";
+                        server.LeaveChannel(search.ElementAt(index).Value, "Kicked by Owner");
+                        text = "Kicked player from the lobby.";
                         break;
                     }
                     text = "No player found with the given nick.";
