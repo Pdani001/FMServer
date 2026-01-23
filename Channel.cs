@@ -359,6 +359,7 @@ namespace FMServer
                             GameState.Jumpscared = character;
                             GameState.BlockLeft = true;
                         }
+                        GameState.LeftLight = false;
                         break;
                     case Character.Chica:
                         if (attackTick > CurrentTick)
@@ -371,6 +372,7 @@ namespace FMServer
                             GameState.Jumpscared = character;
                             GameState.BlockRight = true;
                         }
+                        GameState.RightLight = false;
                         break;
                 }
                 if(newpos == 1)
@@ -621,6 +623,7 @@ namespace FMServer
                             }
                             else
                             {
+                                GameState.RightLight = false;
                                 GameState.BlockRight = true;
                                 GameState.Jumpscared = movechar;
                             }
@@ -630,11 +633,13 @@ namespace FMServer
                             if (oldPos != 7 || GameState.GetRobotAttack(Character.Bonnie) > CurrentTick) return;
                             GameState.SetCharacterPosition(movechar, target);
                             GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
+                            GameState.RightLight = false;
                             break;
                         case Character.Bonnie:
                             if (oldPos != 4 || GameState.GetRobotAttack(Character.Chica) > CurrentTick) return;
                             GameState.SetCharacterPosition(movechar, target);
                             GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
+                            GameState.LeftLight = false;
                             break;
                     }
                     CheckCameraGarble(oldPos, target);
@@ -871,6 +876,8 @@ namespace FMServer
             _members.Clear();
             InputQueue.Clear();
             Owner = null!;
+
+            GameState.ClearPlayers();
 
             GameState = null!;
         }

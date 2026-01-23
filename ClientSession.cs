@@ -90,13 +90,15 @@ namespace FMServer
 
         protected override void OnDisconnected()
         {
-            _server.LeaveChannel(this, ping.IsCancellationRequested ? "Timed out" : "");
-            _server.RemoveClient(this);
+            var server = _server;
+            if (server == null)
+                return;
+            server.LeaveChannel(this, ping.IsCancellationRequested ? "Timed out" : "");
+            server.RemoveClient(this);
             source.Cancel();
             ping.Cancel();
             _buffer.Dispose();
             _server = null!;
-            CurrentChannel = null;
         }
 
         private static JsonSerializerOptions JsonSerializerOptions => new()

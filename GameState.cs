@@ -61,6 +61,12 @@ namespace FMServer
         public int FoxyAttempt { get; set; } = 0;
         public int Musicbox {  get; set; } = 0;
 
+        public void ClearPlayers()
+        {
+            ResetReadyPlayers();
+            playerCharacters.Clear();
+        }
+
         public void ResetReadyPlayers()
         {
             readyPlayers.Clear();

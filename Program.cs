@@ -32,6 +32,18 @@ class Program
                     Console.WriteLine("There is one or more lobbies in-game, if you are sure you want to stop the server, type in 'yes'");
                     stop = true;
                 }
+                if(text == "list")
+                {
+                    var list = server.ChannelList;
+                    if (list.Length == 0)
+                        Console.WriteLine("No lobbies found.");
+                    else
+                    {
+                        Console.WriteLine("Active lobbies:");
+                        foreach(var item in list)
+                            Console.WriteLine($"- {item}");
+                    }
+                }
             }
             server.Stop();
         }

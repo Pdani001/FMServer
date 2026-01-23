@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <Authors>Pdani</Authors>
     <Copyright>$(Authors)</Copyright>
-    <Version>1.2.1</Version>
+    <Version>1.2.2</Version>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

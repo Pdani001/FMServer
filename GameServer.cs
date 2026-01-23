@@ -26,7 +26,9 @@ namespace FMServer
         private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private readonly ConcurrentDictionary<string, Channel> _channels = new();
 
-        public bool ChannelInGame => _channels.Where(kvp=>kvp.Value.State!=ChannelState.Lobby).Any();
+        public bool ChannelInGame => _channels.Any(kvp=>kvp.Value.State!=ChannelState.Lobby);
+
+        public string[] ChannelList => [.. _channels.Select(kvp => $"{kvp.Key} ({kvp.Value.GetMembers().Count}): {kvp.Value.State}")];
 
         public string ServerSecret { get; set; } = "";
 
@@ -70,6 +72,12 @@ namespace FMServer
 
         public void HandleMessage(ClientSession sender, Message msg)
         {
+            if (msg.Type == "ping")
+            {
+                sender.IsAlive = true;
+                sender.LastAlive = 0;
+                return;
+            }
             var senderChannel = sender.CurrentChannel;
 
             if (senderChannel != null && senderChannel.State != ChannelState.Lobby)
@@ -86,12 +94,6 @@ namespace FMServer
                     }
                     return;
                 }
-                if(msg.Type == "ping")
-                {
-                    sender.IsAlive = true;
-                    sender.LastAlive = 0;
-                    return;
-                }
                 // Gameplay input
                 if (!senderChannel.ValidateClientTick(msg.Tick))
                     return;
@@ -106,10 +108,6 @@ namespace FMServer
             }
             switch (msg.Type)
             {
-                case "ping":
-                    sender.IsAlive = true;
-                    sender.LastAlive = 0;
-                    break;
                 case "hello":
                     if (sender.Auth)
                         return;
@@ -408,7 +406,7 @@ namespace FMServer
         {
             var ch = client.CurrentChannel;
             if (ch == null) return;
-
+            client.CurrentChannel = null;
             ch.Leave(client);
             client.Send(new
             {
@@ -427,8 +425,6 @@ namespace FMServer
                 ch.Dispose();
                 _channels.TryRemove(ch.Name, out _);
             }
-
-            client.CurrentChannel = null;
         }
 
         protected override void OnError(SocketError error)
