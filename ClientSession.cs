@@ -118,29 +118,41 @@ namespace FMServer
                 _buffer.Position = 0;
                 int length = BitConverter.ToInt32(_buffer.GetBuffer(), 0);
 
+                if (length <= 0)
+                {
+                    Console.WriteLine($"Invalid packet length {length} from {Id}");
+                    Disconnect();
+                    return;
+                }
+
                 if (_buffer.Length < length + 4)
                     return;
 
-                var jsonBytes = Span<byte>.Empty;
+                var jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
                 try {
-                    jsonBytes = _buffer.GetBuffer().AsSpan(4, length);
-                    var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions)!;
+                    var msg = JsonSerializer.Deserialize<Message>(jsonBytes, JsonSerializerOptions) ?? throw new JsonException("Null message");
                     _server.HandleMessage(this, msg);
                 }
-                catch (Exception) 
+                catch (Exception ex) 
                 {
-                    if(!jsonBytes.IsEmpty)
-                        Console.WriteLine("Failed to deserialize message: " + Encoding.UTF8.GetString(jsonBytes));
-                    else
-                        Console.WriteLine("Invalid message received!");
+                    Console.WriteLine($"Invalid message from {Id}: {ex.Message}");
+                    Disconnect();
+                    return;
                 }
 
-                var remaining = _buffer.Length - (length + 4);
-                var temp = new byte[remaining];
-                Array.Copy(_buffer.GetBuffer(), length + 4, temp, 0, remaining);
+                var remaining = (int)_buffer.Length - (length + 4);
+                if (remaining > 0)
+                {
+                    System.Buffer.BlockCopy(
+                        _buffer.GetBuffer(),
+                        length + 4,
+                        _buffer.GetBuffer(),
+                        0,
+                        remaining
+                    );
+                }
 
-                _buffer.SetLength(0);
-                _buffer.Write(temp, 0, temp.Length);
+                _buffer.SetLength(remaining);
             }
         }
 
