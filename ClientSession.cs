@@ -135,7 +135,10 @@ namespace FMServer
                 }
                 catch (Exception ex) 
                 {
-                    Console.WriteLine($"Invalid message from {Id}: {ex.Message}");
+                    var nick = string.IsNullOrEmpty(Nick) ? "No Nick!" : Nick;
+                    Console.WriteLine($"Invalid message from {Id} ('{nick}'): {ex.Message}");
+                    if(!jsonBytes.IsEmpty)
+                        Console.WriteLine($"Message string: {Encoding.UTF8.GetString(jsonBytes)}");
                     Disconnect();
                     return;
                 }

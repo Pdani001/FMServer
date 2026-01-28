@@ -176,6 +176,7 @@ namespace FMServer
                 {
                     GameState.NightTime += 1;
                 }
+                UpdateAILevel();
                 lastNightTimeUpdateTick = CurrentTick;
                 if(GameState.NightTime == 6)
                 {
@@ -275,6 +276,8 @@ namespace FMServer
             }
             foreach(var character in GameState.GetPlayingRobots().Where(c=>GameState.GetCurrentMoveTimer(c) > 0))
             {
+                if (character == Character.Freddy && GameState.GetCharacterPosition(character) == 7 && ((GameState.CameraActive && GameState.GetCharacterPosition(Character.Guard) == 7) || !GameState.CameraActive))
+                    continue;
                 int timer = GameState.GetCurrentMoveTimer(character);
                 timer -= 1;
                 GameState.SetCharacterMoveTimer(character, timer);
@@ -424,6 +427,22 @@ namespace FMServer
                         });
                     }
                 }
+            }
+        }
+
+        private void UpdateAILevel()
+        {
+            switch (GameState.NightTime)
+            {
+                case 2:
+                    GameState.SetRobotAILevel(Character.Bonnie, GameState.GetRobotAILevel(Character.Bonnie) + 1);
+                    break;
+                case 3:
+                case 4:
+                    GameState.SetRobotAILevel(Character.Bonnie, GameState.GetRobotAILevel(Character.Bonnie) + 1);
+                    GameState.SetRobotAILevel(Character.Chica, GameState.GetRobotAILevel(Character.Chica) + 1);
+                    GameState.SetRobotAILevel(Character.Foxy, GameState.GetRobotAILevel(Character.Foxy) + 1);
+                    break;
             }
         }
 

@@ -17,10 +17,10 @@ namespace FMServer
         private readonly Dictionary<Character, (int, int)> defMoveTimes = new()
         {
             { Character.Guard, (0, 0)},
-            { Character.Freddy, (10, 25)},
+            { Character.Freddy, (6, 15)},
             { Character.Bonnie, (10, 15)},
-            { Character.Chica, (10, 20)},
-            { Character.Foxy, (15, 35)},
+            { Character.Chica, (10, 18)},
+            { Character.Foxy, (15, 30)},
         };
         private readonly Dictionary<Character, int> characterPosition = new()
         {
@@ -29,6 +29,13 @@ namespace FMServer
             { Character.Bonnie, -1 },
             { Character.Chica, -1 },
             { Character.Foxy, 0 }
+        };
+        private readonly Dictionary<Character, int> robotAILevel = new()
+        {
+            { Character.Freddy, 3},
+            { Character.Bonnie, 5},
+            { Character.Chica, 7},
+            { Character.Foxy, 5},
         };
         private readonly Dictionary<Character, long> robotAttackTick = [];
         public int ReadyPlayerCount => readyPlayers.Count;
@@ -170,6 +177,18 @@ namespace FMServer
             if (!GetPlayingRobots().Contains(character))
                 return;
             robotAttackTick[character] = next;
+        }
+
+        public void SetRobotAILevel(Character character, int level)
+        {
+            if (GetPlayingRobots().Contains(character) || !robotAILevel.ContainsKey(character) || level < 0 || level > 20)
+                return;
+            robotAILevel[character] = level;
+        }
+
+        public int GetRobotAILevel(Character character)
+        {
+            return robotAILevel.GetValueOrDefault(character, 0);
         }
 
         public bool IsValidMove(Character character, int position)
