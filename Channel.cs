@@ -93,17 +93,23 @@ namespace FMServer
             if(State != ChannelState.Starting)
                 return;
             IsCountdown = false;
-            foreach (var character in GameState.GetPlayingRobots())
+            foreach (var character in GameState.GetPlayerRobots())
             {
                 GameState.SetCharacterPosition(character, 0);
                 GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
             }
+            foreach (var character in Enum.GetValues<Character>())
+            {
+                var time = (long)Math.Round(GameServer.TICK_RATE * GameState.GetAIMoveTime(character), MidpointRounding.AwayFromZero);
+                GameState.SetCharacterPosition(character, 0);
+                GameState.SetNextMoveOppurtunity(character, time);
+            }
             Broadcast(new
             {
                 type = "game_start",
-                positions = GameState.GetPlayingRobots().Select(c=>new { character = c, position = GameState.GetCharacterPosition(c) }).ToArray(),
+                positions = GameState.GetActiveRobots().Select(c => new { character = c, position = GameState.GetCharacterPosition(c) }).ToArray(),
             });
-            foreach (var client in _members.Values.Where(c => GameState.GetPlayingRobots().Contains(GameState.GetPlayerCharacter(c.Id))))
+            foreach (var client in _members.Values.Where(c => GameState.GetPlayerRobots().Contains(GameState.GetPlayerCharacter(c.Id))))
             {
                 client?.Send(new
                 {
@@ -151,6 +157,7 @@ namespace FMServer
 
             ProcessInputs();
             UpdateLogic();
+            AdvanceRobotMovement();
             BroadcastSnapshot();
         }
 
@@ -274,7 +281,7 @@ namespace FMServer
                 }
                 return;
             }
-            foreach(var character in GameState.GetPlayingRobots().Where(c=>GameState.GetCurrentMoveTimer(c) > 0))
+            foreach(var character in GameState.GetPlayerRobots().Where(c=>GameState.GetCurrentMoveTimer(c) > 0))
             {
                 if (character == Character.Freddy && GameState.GetCharacterPosition(character) == 7 && ((GameState.CameraActive && GameState.GetCharacterPosition(Character.Guard) == 7) || !GameState.CameraActive))
                     continue;
@@ -288,11 +295,11 @@ namespace FMServer
                 });
             }
             int guardPos = GameState.GetCharacterPosition(Character.Guard);
-            foreach (Character character in GameState.GetPlayingRobots().Where(c=>c!=Character.Freddy && GameState.GetRobotAttack(c) > 0).OrderBy(GameState.GetRobotAttack))
+            foreach (Character character in GameState.GetActiveRobots().Where(c=>c!=Character.Freddy && GameState.GetRobotAttack(c) > 0).OrderBy(GameState.GetRobotAttack))
             {
                 int position = GameState.GetCharacterPosition(character);
                 long attackTick = GameState.GetRobotAttack(character);
-                int newpos = 1;
+                int newpos = GameState.GetAttackReturnTarget(character);
                 switch (character)
                 {
                     case Character.Foxy:
@@ -301,7 +308,7 @@ namespace FMServer
                         {
                             if ((GameState.CameraGarble || (guardPos != 3 && GameState.CameraActive) || !GameState.CameraActive) && attackTick > CurrentTick)
                             {
-                                return;
+                                continue;
                             }
                             if (guardPos == 3 && GameState.CameraActive)
                             {
@@ -326,7 +333,7 @@ namespace FMServer
                             {
                                 GameState.Power -= 10 + GameState.FoxyAttempt * 13;
                                 GameState.FoxyAttempt++;
-                                newpos = GameServer.RNG.Next(2);
+                                newpos = GameState.GetAttackReturnTarget(character);
                                 GameState.SetCharacterPosition(character, newpos);
                                 Broadcast(new
                                 {
@@ -336,8 +343,12 @@ namespace FMServer
                                 });
                                 CheckCameraGarble(3, 2);
                                 GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
-                                return;
+                                double moveTime = GameState.GetAIMoveTime(character);
+                                long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+                                GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+                                continue;
                             }
+                            GameState.SetNextMoveOppurtunity(character, 0);
                             GameState.BlockLeft = true;
                             GameState.LeftLight = false;
                             GameState.Jumpscared = character;
@@ -349,12 +360,13 @@ namespace FMServer
                                 value = newpos
                             });
                             CheckCameraGarble(3, 21);
-                        }
-                        return;
-                    case Character.Bonnie:
-                        if (attackTick > CurrentTick)
-                        {
                             return;
+                        }
+                        continue;
+                    case Character.Bonnie:
+                        if (attackTick > CurrentTick || GameState.Jumpscared != Character.None)
+                        {
+                            continue;
                         }
                         if(!GameState.LeftDoor)
                         {
@@ -365,9 +377,9 @@ namespace FMServer
                         GameState.LeftLight = false;
                         break;
                     case Character.Chica:
-                        if (attackTick > CurrentTick)
+                        if (attackTick > CurrentTick || GameState.Jumpscared != Character.None)
                         {
-                            return;
+                            continue;
                         }
                         if (!GameState.RightDoor)
                         {
@@ -378,9 +390,12 @@ namespace FMServer
                         GameState.RightLight = false;
                         break;
                 }
-                if(newpos == 1)
+                if(newpos <= 10)
                 {
                     GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
+                    double moveTime = GameState.GetAIMoveTime(character);
+                    long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+                    GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
                 }
                 CheckCameraGarble(position, newpos);
                 GameState.SetCharacterPosition(character, newpos);
@@ -444,6 +459,113 @@ namespace FMServer
                     GameState.SetRobotAILevel(Character.Foxy, GameState.GetRobotAILevel(Character.Foxy) + 1);
                     break;
             }
+        }
+
+        private void AdvanceRobotMovement()
+        {
+            if(GameState.NightTime == 6 || GameState.PowerDown)
+                return;
+            foreach (var character in GameState.GetAIRobots())
+            {
+                long nextMoveTick = GameState.GetNextMoveOppurtunity(character);
+                if (nextMoveTick <= 0 || CurrentTick < nextMoveTick)
+                {
+                    continue;
+                }
+                int level = GameState.GetRobotAILevel(character);
+                if (GameServer.RNG.Next(20) < level)
+                {
+                    int target = GameState.GetAITarget(character);
+                    int oldPos = GameState.GetCharacterPosition(character);
+                    if(target == 21)
+                    {
+                        target = StartAttack(character);
+                    }
+                    if(oldPos == 21)
+                    {
+                        target = CheckAIAttack(character);
+                    }
+                    if (GameState.AttemptMove(character, target))
+                    {
+                        target = GameState.GetCharacterPosition(character);
+                        if (character == Character.Foxy && target == 3)
+                            GameState.SetRobotAttack(character, CurrentTick + GameServer.TICK_RATE * 10);
+                        Broadcast(new
+                        {
+                            type = "move",
+                            character,
+                            value = target
+                        });
+                        if (character == Character.Foxy)
+                        {
+                            switch (target)
+                            {
+                                case 0:
+                                case 1:
+                                case 2:
+                                    if (oldPos < 3)
+                                    {
+                                        oldPos = 2;
+                                    }
+                                    else
+                                    {
+                                        oldPos = 3;
+                                    }
+                                    target = 2;
+                                    break;
+                                case 3:
+                                    oldPos = 2;
+                                    target = 3;
+                                    break;
+                            }
+                        }
+                        CheckCameraGarble(oldPos, target);
+                    }
+                }
+                if(GameState.GetRobotAttack(character) > 0)
+                {
+                    GameState.SetNextMoveOppurtunity(character, 0);
+                    continue;
+                }
+                double moveTime = GameState.GetAIMoveTime(character);
+                long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+                GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+            }
+        }
+
+        int CheckAIAttack(Character character)
+        {
+            int newpos = GameState.GetAttackReturnTarget(character);
+            switch (character)
+            {
+                case Character.Bonnie:
+                    if (GameState.Jumpscared != Character.None)
+                    {
+                        return -1;
+                    }
+                    if (!GameState.LeftDoor)
+                    {
+                        newpos = 22;
+                        GameState.Jumpscared = character;
+                        GameState.BlockLeft = true;
+                    }
+                    GameState.LeftLight = false;
+                    break;
+                case Character.Chica:
+                    if (GameState.Jumpscared != Character.None)
+                    {
+                        return -1;
+                    }
+                    if (!GameState.RightDoor)
+                    {
+                        newpos = 22;
+                        GameState.Jumpscared = character;
+                        GameState.BlockRight = true;
+                    }
+                    GameState.RightLight = false;
+                    break;
+            }
+            return newpos;
         }
 
         void ApplyValidatedInput(QueuedInput input)
@@ -538,62 +660,13 @@ namespace FMServer
                         return;
                     }
                     int oldPos = GameState.GetCharacterPosition(movechar);
-                    bool update = true;
-                    switch (movechar)
+                    if(!GameState.AttemptMove(movechar, target))
                     {
-                        case Character.Freddy:
-                            switch (target)
-                            {
-                                case 6:
-                                case 7:
-                                    if (GameState.GetCharacterPosition(Character.Chica) == target)
-                                        return;
-                                    break;
-                                case 1:
-                                    if (GameState.GetCharacterPosition(Character.Bonnie) == 0 || GameState.GetCharacterPosition(Character.Chica) == 0)
-                                        return;
-                                    break;
-                            }
-                            break;
-                        case Character.Chica:
-                            switch (target)
-                            {
-                                case 6:
-                                case 7:
-                                    if (GameState.GetCharacterPosition(Character.Freddy) == target)
-                                        return;
-                                    break;
-                            }
-                            break;
-                        case Character.Bonnie:
-                            switch (target)
-                            {
-                                case 3:
-                                    if (GameState.GetCharacterPosition(Character.Foxy) >= 3)
-                                        return;
-                                    break;
-                            }
-                            break;
-                        case Character.Foxy:
-                            if(target == 2)
-                                target = oldPos + 1;
-                            switch (target)
-                            {
-                                case 3:
-                                    if (GameState.GetCharacterPosition(Character.Bonnie) == 3 || GameState.GetCharacterPosition(Character.Bonnie) >= 21)
-                                        return;
-                                    GameState.SetRobotAttack(Character.Foxy, CurrentTick + GameServer.TICK_RATE * 10);
-                                    update = false;
-                                    break;
-                                default:
-                                    GameState.SetRobotAttack(Character.Foxy, 0);
-                                    break;
-                            }
-                            break;
+                        return;
                     }
-                    if(update)
-                        GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
-                    GameState.SetCharacterPosition(movechar, target);
+                    target = GameState.GetCharacterPosition(movechar);
+                    if (movechar == Character.Foxy && target == 3)
+                        GameState.SetRobotAttack(Character.Foxy, CurrentTick + GameServer.TICK_RATE * 10);
                     Broadcast(new
                     {
                         type = "move",
@@ -629,47 +702,66 @@ namespace FMServer
                     movechar = GameState.GetPlayerCharacter(input.Client.Id);
                     if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCurrentMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
                         return;
-                    oldPos = GameState.GetCharacterPosition(movechar);
-                    target = 21;
-                    switch (movechar)
-                    {
-                        case Character.Freddy:
-                            if(oldPos != 7) return;
-                            if (GameState.RightDoor)
-                            {
-                                target = 1;
-                                GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
-                            }
-                            else
-                            {
-                                GameState.RightLight = false;
-                                GameState.BlockRight = true;
-                                GameState.Jumpscared = movechar;
-                            }
-                            GameState.SetCharacterPosition(movechar, target);
-                            break;
-                        case Character.Chica:
-                            if (oldPos != 7 || GameState.GetRobotAttack(Character.Bonnie) > CurrentTick) return;
-                            GameState.SetCharacterPosition(movechar, target);
-                            GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
-                            GameState.RightLight = false;
-                            break;
-                        case Character.Bonnie:
-                            if (oldPos != 4 || GameState.GetRobotAttack(Character.Chica) > CurrentTick) return;
-                            GameState.SetCharacterPosition(movechar, target);
-                            GameState.SetRobotAttack(movechar, CurrentTick + GameServer.TICK_RATE * 6);
-                            GameState.LeftLight = false;
-                            break;
-                    }
-                    CheckCameraGarble(oldPos, target);
-                    Broadcast(new
-                    {
-                        type = "move",
-                        character = movechar,
-                        value = target
-                    });
+                    target = StartAttack(movechar);
+                    if(target != -1)
+                        Broadcast(new
+                        {
+                            type = "move",
+                            character = movechar,
+                            value = target
+                        });
                     break;
             }
+        }
+
+        int StartAttack(Character movechar)
+        {
+            int oldPos = GameState.GetCharacterPosition(movechar);
+            int target = 21;
+            double moveTime = GameState.GetAIMoveTime(movechar);
+            long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+            switch (movechar)
+            {
+                case Character.Freddy:
+                    if (oldPos != 7) return -1;
+                    if(GameState.GetAIRobots().Contains(movechar) && ((GameState.CameraActive && GameState.GetCharacterPosition(Character.Guard) == 7) || !GameState.CameraActive))
+                    {
+                        return -1;
+                    }
+                    if (GameState.RightDoor)
+                    {
+                        target = GameState.GetAttackReturnTarget(movechar);
+                        GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
+                    }
+                    else
+                    {
+                        GameState.RightLight = false;
+                        GameState.BlockRight = true;
+                        GameState.Jumpscared = movechar;
+                    }
+                    GameState.SetCharacterPosition(movechar, target);
+                    break;
+                case Character.Chica:
+                    if (oldPos != 7) return -1;
+                    GameState.SetCharacterPosition(movechar, target);
+                    if(GameState.GetPlayerRobots().Contains(movechar))
+                    {
+                        GameState.SetRobotAttack(movechar, newNextMoveTick);
+                    }
+                    GameState.RightLight = false;
+                    break;
+                case Character.Bonnie:
+                    if (oldPos != 4 || GameState.GetCharacterPosition(Character.Foxy) >= 3) return -1;
+                    GameState.SetCharacterPosition(movechar, target);
+                    if (GameState.GetPlayerRobots().Contains(movechar))
+                    {
+                        GameState.SetRobotAttack(movechar, newNextMoveTick);
+                    }
+                    GameState.LeftLight = false;
+                    break;
+            }
+            CheckCameraGarble(oldPos, target);
+            return target;
         }
 
         void CheckCameraGarble(int oldPos, int target)
@@ -792,6 +884,15 @@ namespace FMServer
                         break;
                     }
                     text = "No player found with the given nick.";
+                    break;
+                case "aitest":
+                    if (!IsOwner(sender))
+                        break;
+                    foreach(var character in Enum.GetValues<Character>())
+                    {
+                        GameState.SetRobotAILevel(character, 20);
+                    }
+                    text = "AI levels set to 20 for testing.";
                     break;
             }
             if(text != "")

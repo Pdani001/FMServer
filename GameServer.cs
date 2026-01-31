@@ -279,7 +279,7 @@ namespace FMServer
                     if (msg.Text.StartsWith('/'))
                     {
                         var args = msg.Text[1..].Split(' ');
-                        senderChannel?.HandleCommand(this, sender, args[0], args[1..]);
+                        senderChannel?.HandleCommand(this, sender, args[0].ToLower(), args[1..]);
                         return;
                     }
                     senderChannel?.Broadcast(new

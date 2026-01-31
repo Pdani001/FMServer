@@ -22,6 +22,7 @@ namespace FMServer
             { Character.Chica, (10, 18)},
             { Character.Foxy, (15, 30)},
         };
+        private readonly Dictionary<Character, long> nextMoveOppurtunity = [];
         private readonly Dictionary<Character, int> characterPosition = new()
         {
             { Character.Guard, 0 },
@@ -117,6 +118,17 @@ namespace FMServer
             return playerCharacters.Select(x=>new { Character = x.Value, Id = x.Key, Ready = IsPlayerReady(x.Key) } as object).ToList();
         }
 
+        public long GetNextMoveOppurtunity(Character character)
+        {
+            return nextMoveOppurtunity.GetValueOrDefault(character, 0);
+        }
+
+        public void SetNextMoveOppurtunity(Character character, long tick)
+        {
+            if(!playerCharacters.ContainsValue(character) && character != Character.None && character != Character.Guard)
+                nextMoveOppurtunity[character] = tick;
+        }
+
         public int GetCurrentMoveTimer(Character character)
         {
             return characterMoveTimer.GetValueOrDefault(character, 1);
@@ -131,7 +143,8 @@ namespace FMServer
 
         public void SetCharacterMoveTimer(Character character, int timer)
         {
-            characterMoveTimer[character] = timer;
+            if(playerCharacters.ContainsValue(character))
+                characterMoveTimer[character] = timer;
         }
 
         public Character GetPlayerCharacter(Guid id)
@@ -143,9 +156,31 @@ namespace FMServer
             return character;
         }
 
-        public Character[] GetPlayingRobots()
+        public Character[] GetActiveRobots()
         {
-            return playerCharacters.Values.Where(c => c != Character.Guard).ToArray();
+            return [.. GetPlayerRobots() , .. GetAIRobots()];
+        }
+
+        public Character[] GetPlayerRobots()
+        {
+            return [.. playerCharacters.Values.Where(c => c != Character.Guard)];
+        }
+
+        public Character[] GetAIRobots()
+        {
+            return [.. nextMoveOppurtunity.Keys];
+        }
+
+        public double GetAIMoveTime(Character character)
+        {
+            return character switch
+            {
+                Character.Freddy => 3.02,
+                Character.Bonnie => 4.97,
+                Character.Chica => 4.98,
+                Character.Foxy => GetCharacterPosition(character) <= 2 ? 5.01 : 0,
+                _ => 0
+            };
         }
 
         public bool IsCharacterPlaying(Character character)
@@ -167,21 +202,21 @@ namespace FMServer
 
         public long GetRobotAttack(Character character)
         {
-            if (!GetPlayingRobots().Contains(character))
+            if (!GetPlayerRobots().Contains(character) && !GetAIRobots().Contains(character))
                 return 0;
             return robotAttackTick.GetValueOrDefault(character, 0);
         }
 
         public void SetRobotAttack(Character character, long next)
         {
-            if (!GetPlayingRobots().Contains(character))
+            if (!GetPlayerRobots().Contains(character) && !GetAIRobots().Contains(character))
                 return;
             robotAttackTick[character] = next;
         }
 
         public void SetRobotAILevel(Character character, int level)
         {
-            if (GetPlayingRobots().Contains(character) || !robotAILevel.ContainsKey(character) || level < 0 || level > 20)
+            if (!robotAILevel.ContainsKey(character) || level < 0 || level > 20)
                 return;
             robotAILevel[character] = level;
         }
@@ -191,54 +226,207 @@ namespace FMServer
             return robotAILevel.GetValueOrDefault(character, 0);
         }
 
-        public bool IsValidMove(Character character, int position)
+        public bool AttemptMove(Character character, int target)
         {
-            if(position < 0 || position > 10)
+            if(target < 0)
+            {
+                return false;
+            }
+            int oldPos = GetCharacterPosition(character);
+            bool update = true;
+            switch (character)
+            {
+                case Character.Freddy:
+                    switch (target)
+                    {
+                        case 6:
+                        case 7:
+                            if (GetCharacterPosition(Character.Chica) == target)
+                                return false;
+                            break;
+                        case 1:
+                            if (GetCharacterPosition(Character.Bonnie) == 0 || GetCharacterPosition(Character.Chica) == 0)
+                                return false;
+                            break;
+                        case 21:
+                            if((CameraActive && GetCharacterPosition(Character.Guard) == 7) || !CameraActive)
+                                return false;
+                            break;
+                    }
+                    break;
+                case Character.Chica:
+                    switch (target)
+                    {
+                        case 6:
+                        case 7:
+                            if (GetCharacterPosition(Character.Freddy) == target)
+                                return false;
+                            break;
+                    }
+                    break;
+                case Character.Bonnie:
+                    switch (target)
+                    {
+                        case 3:
+                        case 21:
+                            if (GetCharacterPosition(Character.Foxy) >= 3)
+                                return false;
+                            break;
+                    }
+                    break;
+                case Character.Foxy:
+                    if(GetAIRobots().Contains(Character.Foxy) && CameraActive)
+                    {
+                        return false;
+                    }
+                    if (target == 2)
+                        target = oldPos + 1;
+                    switch (target)
+                    {
+                        case 3:
+                            if (GetCharacterPosition(Character.Bonnie) == 3 || GetCharacterPosition(Character.Bonnie) >= 21)
+                                return false;
+                            update = false;
+                            break;
+                        default:
+                            SetRobotAttack(Character.Foxy, 0);
+                            break;
+                    }
+                    break;
+            }
+            if (update)
+                SetCharacterMoveTimer(character, GetNewMoveTimer(character));
+            SetCharacterPosition(character, target);
+            return true;
+        }
+
+        public int GetAITarget(Character character)
+        {
+            int current = GetCharacterPosition(character);
+            return character switch
+            {
+                Character.Freddy => current switch
+                {
+                    0 => 1,
+                    1 => 10,
+                    10 => 9,
+                    9 => 6,
+                    6 => 7,
+                    7 => 21,
+                    _ => -1,
+                },
+                Character.Bonnie => current switch
+                {
+                    0 => GameServer.RNG.Next(2) == 1 ? 8 : 1,
+                    1 => GameServer.RNG.Next(5) == 0 ? 8 : 3,
+                    3 => GameServer.RNG.Next(2) == 1 ? 4 : 5,
+                    5 => GameServer.RNG.Next(3) == 0 ? 3 : 21,
+                    4 => GameServer.RNG.Next(3) == 0 ? 5 : 21,
+                    8 => GameServer.RNG.Next(5) == 0 ? 1 : 3,
+                    _ => -1,
+                },
+                Character.Chica => current switch
+                {
+                    0 => 1,
+                    1 => GameServer.RNG.Next(2) == 1 ? 10 : 9,
+                    9 => GameServer.RNG.Next(5) == 0 ? 10 : 6,
+                    10 => GameServer.RNG.Next(5) == 0 ? 9 : 6,
+                    6 => GameServer.RNG.Next(5) == 0 ? 1 : 7,
+                    7 => GameServer.RNG.Next(3) == 0 ? 6 : 21,
+                    _ => -1,
+                },
+                Character.Foxy => current switch
+                {
+                    0 => 2,
+                    1 => 2,
+                    2 => 3,
+                    _ => -1
+                },
+                _ => -1,
+            };
+        }
+
+        public int GetAttackReturnTarget(Character character)
+        {
+            return character switch
+            {
+                Character.Freddy => GetCharacterPosition(Character.Chica) == 6 ? 10 : 6,
+                Character.Bonnie => 1,
+                Character.Chica => GetCharacterPosition(Character.Freddy) == 6 ? 10 : GameServer.RNG.Next(2) == 1 ? 6 : 1,
+                Character.Foxy => GameServer.RNG.Next(2),
+                _ => -1,
+            };
+        }
+
+        public bool IsValidMove(Character character, int target)
+        {
+            if(target < 0 || target > 10)
             {
                 return false;
             }
             int current = GetCharacterPosition(character);
             return character switch
             {
-                Character.Freddy or Character.Chica => current switch
+                Character.Freddy => current switch
                 {
-                    0 => position == 1,
-                    1 => position == 0
-                        || position == 10
-                        || position == 9
-                        || position == 6,
-                    10 => position == 1
-                        || position == 9,
-                    9 => position == 1
-                        || position == 10
-                        || position == 6,
-                    6 => position == 9
-                        || position == 7
-                        || position == 1,
-                    7 => position == 6,
+                    0 => target == 1,
+                    1 => target == 0
+                        || target == 10
+                        || target == 9
+                        || target == 6,
+                    10 => target == 1
+                        || target == 9,
+                    9 => target == 1
+                        || target == 10
+                        || target == 6,
+                    6 => target == 9
+                        || target == 7
+                        || target == 1,
+                    7 => target == 6,
+                    _ => false,
+                },
+                Character.Chica => current switch
+                {
+                    0 => target == 1,
+                    1 => target == 0
+                        || target == 10
+                        || target == 9
+                        || target == 6,
+                    10 => target == 1
+                        || target == 9
+                        || target == 6,
+                    9 => target == 1
+                        || target == 10
+                        || target == 6,
+                    6 => target == 9
+                        || target == 7
+                        || target == 1,
+                    7 => target == 6,
                     _ => false,
                 },
                 Character.Bonnie => current switch
                 {
-                    0 => position == 1,
-                    1 => position == 0
-                        || position == 8
-                        || position == 3,
-                    8 => position == 1,
-                    3 => position == 1
-                        || position == 5
-                        || position == 4,
-                    5 => position == 3
-                        || position == 4,
-                    4 => position == 3
-                        || position == 5,
+                    0 => target == 1
+                        || target == 8,
+                    1 => target == 0
+                        || target == 8
+                        || target == 3,
+                    8 => target == 1
+                        || target == 3,
+                    3 => target == 1
+                        || target == 5
+                        || target == 4,
+                    5 => target == 3
+                        || target == 4,
+                    4 => target == 3
+                        || target == 5,
                     _ => false,
                 },
                 Character.Foxy => current switch
                 {
-                    0 => position == 2,
-                    1 => position == 2,
-                    2 => position == 3,
+                    0 => target == 2,
+                    1 => target == 2,
+                    2 => target == 3,
                     _ => false
                 },
                 Character.Guard => true,
