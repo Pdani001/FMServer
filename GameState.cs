@@ -53,6 +53,7 @@ namespace FMServer
                 }
             }
         }
+        public bool AllowAI { get; set; } = false;
         public bool PowerDown { get; set; } = false;
         public Character Jumpscared { get; set; } = Character.None;
         public bool ActiveJumpscare { get; set; } = false;

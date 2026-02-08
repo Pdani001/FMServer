@@ -98,11 +98,14 @@ namespace FMServer
                 GameState.SetCharacterPosition(character, 0);
                 GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
             }
-            foreach (var character in Enum.GetValues<Character>())
+            if (GameState.AllowAI)
             {
-                var time = (long)Math.Round(GameServer.TICK_RATE * GameState.GetAIMoveTime(character), MidpointRounding.AwayFromZero);
-                GameState.SetCharacterPosition(character, 0);
-                GameState.SetNextMoveOppurtunity(character, time);
+                foreach (var character in Enum.GetValues<Character>())
+                {
+                    var time = (long)Math.Round(GameServer.TICK_RATE * GameState.GetAIMoveTime(character), MidpointRounding.AwayFromZero);
+                    GameState.SetCharacterPosition(character, 0);
+                    GameState.SetNextMoveOppurtunity(character, time);
+                }
             }
             Broadcast(new
             {
@@ -343,9 +346,12 @@ namespace FMServer
                                 });
                                 CheckCameraGarble(3, 2);
                                 GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
-                                double moveTime = GameState.GetAIMoveTime(character);
-                                long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
-                                GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+                                if (GameState.AllowAI)
+                                {
+                                    double moveTime = GameState.GetAIMoveTime(character);
+                                    long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+                                    GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+                                }
                                 continue;
                             }
                             GameState.SetNextMoveOppurtunity(character, 0);
@@ -393,9 +399,12 @@ namespace FMServer
                 if(newpos <= 10)
                 {
                     GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
-                    double moveTime = GameState.GetAIMoveTime(character);
-                    long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
-                    GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+                    if (GameState.AllowAI)
+                    {
+                        double moveTime = GameState.GetAIMoveTime(character);
+                        long newNextMoveTick = CurrentTick + (long)Math.Round(GameServer.TICK_RATE * moveTime, MidpointRounding.AwayFromZero);
+                        GameState.SetNextMoveOppurtunity(character, newNextMoveTick);
+                    }
                 }
                 CheckCameraGarble(position, newpos);
                 GameState.SetCharacterPosition(character, newpos);
@@ -447,6 +456,8 @@ namespace FMServer
 
         private void UpdateAILevel()
         {
+            if(!GameState.AllowAI)
+                return;
             switch (GameState.NightTime)
             {
                 case 2:
@@ -463,7 +474,7 @@ namespace FMServer
 
         private void AdvanceRobotMovement()
         {
-            if(GameState.NightTime == 6 || GameState.PowerDown)
+            if(GameState.NightTime == 6 || GameState.PowerDown || !GameState.AllowAI)
                 return;
             foreach (var character in GameState.GetAIRobots())
             {
@@ -806,7 +817,7 @@ namespace FMServer
 
         public bool ValidateClientTick([NotNullWhen(true)] long? clientTick)
         {
-            if (clientTick == null)
+            if (clientTick == null || !clientTick.HasValue)
                 return false;
 
             long delta = clientTick.Value - CurrentTick;
@@ -826,6 +837,7 @@ namespace FMServer
         public void HandleCommand(GameServer server, ClientSession sender, string command, string[] args)
         {
             var text = "";
+            var broadcast = false;
             switch (command)
             {
                 case "help":
@@ -835,7 +847,8 @@ namespace FMServer
                     if (IsOwner(sender))
                     {
                         text += "\n- /pw [password] - Sets or unsets the lobby password"
-                            + "\n- /kick <nick> - Kicks the first player with the given nickname";
+                            + "\n- /kick <nick> - Kicks the first player with the given nickname"
+                            + "\n- /ai <on/off> [difficulty: 0/1] - Toggle AI and set difficulty to normal [0] (3/5/7/5) or hard [1] (20/20/20/20)";
                     }
                     break;
                 case "list":
@@ -852,6 +865,7 @@ namespace FMServer
                         {
                             Password = "";
                             text = "Lobby password removed.";
+                            broadcast = true;
                         }
                         else
                         {
@@ -861,6 +875,7 @@ namespace FMServer
                     }
                     Password = string.Join(' ', args);
                     text = "Lobby password set.";
+                    broadcast = true;
                     break;
                 case "kick":
                     if (!IsOwner(sender))
@@ -885,18 +900,49 @@ namespace FMServer
                     }
                     text = "No player found with the given nick.";
                     break;
-                case "aitest":
+                case "ai":
                     if (!IsOwner(sender))
                         break;
-                    foreach(var character in Enum.GetValues<Character>())
+                    if (args.Length == 0 || !OnOffArray.Contains(args[0].ToLower()))
                     {
-                        GameState.SetRobotAILevel(character, 20);
+                        text = "Usage: /ai <on/off> [difficulty: 0/1]";
+                        break;
                     }
-                    text = "AI levels set to 20 for testing.";
+                    GameState.AllowAI = args[0].ToLower() == "on";
+                    byte difficulty = 0;
+                    if (args.Length > 1)
+                    {
+                        if (!byte.TryParse(args[1], out difficulty) || difficulty > 1)
+                        {
+                            text = "Difficulty must be 0 (normal) or 1 (hard)";
+                            break;
+                        }
+                    }
+                    if (difficulty == 0)
+                    {
+                        GameState.SetRobotAILevel(Character.Freddy, 3);
+                        GameState.SetRobotAILevel(Character.Bonnie, 5);
+                        GameState.SetRobotAILevel(Character.Chica, 7);
+                        GameState.SetRobotAILevel(Character.Foxy, 5);
+                    }
+                    else
+                    {
+                        foreach (var character in Enum.GetValues<Character>())
+                        {
+                            GameState.SetRobotAILevel(character, 20);
+                        }
+                    }
+                    broadcast = true;
+                    text = $"AI is now {args[0].ToLower()}";
+                    if(GameState.AllowAI)
+                    {
+                        text += $" with {(difficulty == 0 ? "normal" : "hard")} difficulty";
+                    }
                     break;
             }
-            if(text != "")
-                sender.Send(new
+            Action<object> action = broadcast ? Broadcast : sender.Send;
+            if (text != "")
+                action(new
                 {
                     type = "chat",
                     client = ServerClient,
@@ -957,6 +1003,8 @@ namespace FMServer
         }
         public bool IsPasswordProtected => !string.IsNullOrEmpty(Password);
         public bool IsEmpty => _members.IsEmpty;
+        private static readonly string[] OnOffArray = new[] { "on", "off" };
+
         public bool IsOwner(ClientSession s) => Owner != null && s.Id == Owner.Id;
 
         internal List<object> GetMembers()
