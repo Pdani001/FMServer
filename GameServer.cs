@@ -21,7 +21,7 @@ namespace FMServer
         }
         public static readonly int TICK_RATE = 10;
         public static readonly int TICK_INTERVAL_MS = 1000/TICK_RATE;
-        public const int PROTOCOL_VERSION = 4;
+        public const int PROTOCOL_VERSION = 5;
 
         private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
         private readonly ConcurrentDictionary<string, Channel> _channels = new();
@@ -296,9 +296,9 @@ namespace FMServer
                     {
                         return;
                     }
-                    if (senderChannel.GameState.IsPlayerReady(sender.Id) || msg.Value == null || !Enum.IsDefined(typeof(Character), msg.Value))
+                    if (senderChannel.GameState.IsPlayerReady(sender.Id) || msg.Character == null || !Enum.IsDefined(typeof(Character), msg.Character))
                         return;
-                    var character = (Character)msg.Value;
+                    var character = (Character)msg.Character;
                     if (character != Character.None && senderChannel.GameState.IsCharacterPlaying(character) || character == senderChannel.GameState.GetPlayerCharacter(sender.Id))
                         return;
                     if(senderChannel.GameState.SetPlayerCharacter(sender.Id, character))
@@ -307,7 +307,7 @@ namespace FMServer
                         {
                             type = "select",
                             client = sender.Info,
-                            value = character
+                            character
                         });
                         return;
                     }
@@ -324,7 +324,7 @@ namespace FMServer
                         senderChannel.Broadcast(new
                         {
                             type = "ready",
-                            value = character,
+                            character,
                             ready = msg.Value == 1
                         });
                         if (senderChannel.GetMembers().Count >= 2 && senderChannel.GameState.ReadyPlayerCount == senderChannel.GetMembers().Count && senderChannel.State == ChannelState.Lobby)
@@ -332,6 +332,131 @@ namespace FMServer
                             senderChannel.Countdown();
                         }
                     }
+                    break;
+
+                case "gamemode":
+                    if (!sender.Auth || sender.Session != msg.Session || senderChannel == null || !senderChannel.IsOwner(sender))
+                        return;
+                    bool validMode = false;
+                    switch (msg.Text)
+                    {
+                        case "animatronicai":
+                            senderChannel.GameState.AllowAI = msg.Value == 1;
+                            if(!senderChannel.GameState.AllowAI)
+                            {
+                                foreach (var mt in GameState.defaultRobotAILevel)
+                                {
+                                    if (mt.Key == Character.None || mt.Key == Character.Guard)
+                                        continue;
+                                    if(mt.Value == senderChannel.GameState.GetRobotAILevel(mt.Key))
+                                        continue;
+                                    senderChannel.GameState.SetRobotAILevel(mt.Key, mt.Value);
+                                    senderChannel.Broadcast(new
+                                    {
+                                        type = "ai_level",
+                                        ailevel = new
+                                        {
+                                            character = mt.Key,
+                                            level = mt.Value
+                                        }
+                                    });
+                                }
+                            }
+                            validMode = true;
+                            break;
+                        case "customnight":
+                            senderChannel.GameState.IsCustomNight = msg.Value == 1;
+                            if (!senderChannel.GameState.IsCustomNight)
+                            {
+                                foreach(var mt in GameState.defaultMoveTimes)
+                                {
+                                    if(mt.Key == Character.None || mt.Key == Character.Guard)
+                                        continue;
+                                    if(mt.Value == senderChannel.GameState.GetCustomMoveTime(mt.Key))
+                                        continue;
+                                    senderChannel.GameState.SetCustomMoveTime(mt.Key, mt.Value.Item1, mt.Value.Item2);
+                                    senderChannel.Broadcast(new
+                                    {
+                                        type = "custom_night",
+                                        movetime = new
+                                        {
+                                            character = mt.Key,
+                                            min = mt.Value.Item1,
+                                            max = mt.Value.Item2
+                                        }
+                                    });
+                                }
+                            }
+                            validMode = true;
+                            break;
+                    }
+                    if (!validMode)
+                        return;
+                    senderChannel.Broadcast(new
+                    {
+                        type = "gamemode",
+                        msg.Text,
+                        msg.Value
+                    });
+                    break;
+
+                /*
+                 * {
+                 * type = "custom_night",
+                 * character = 1-4,
+                 * text = "min/max",
+                 * value = value >= 1, max >= min, value <= 60
+                 * }
+                 */
+                case "custom_night":
+                    if (!sender.Auth || sender.Session != msg.Session || senderChannel == null || !senderChannel.IsOwner(sender))
+                        return;
+                    if (senderChannel.GameState.IsPlayerReady(sender.Id) || msg.Character == null || !Enum.IsDefined(typeof(Character), msg.Character))
+                        return;
+                    character = (Character)msg.Character;
+                    if (msg.Text == null || (msg.Text != "min" && msg.Text != "max"))
+                        return;
+                    (int,int) movetimes = senderChannel.GameState.GetCustomMoveTime(character);
+                    if (msg.Text == "min")
+                    {
+                        int newmin = Math.Clamp(msg.Value.GetValueOrDefault(GameState.defaultMoveTimes[character].Item1), 1, 60);
+                        int newmax = newmin > movetimes.Item2 ? newmin : movetimes.Item2;
+                        senderChannel.GameState.SetCustomMoveTime(character, newmin, newmax);
+                    }
+                    else
+                    {
+                        int newmax = Math.Clamp(msg.Value.GetValueOrDefault(GameState.defaultMoveTimes[character].Item2), 1, 60);
+                        int newmin = newmax < movetimes.Item1 ? newmax : movetimes.Item1;
+                        senderChannel.GameState.SetCustomMoveTime(character, newmin, newmax);
+                    }
+                    movetimes = senderChannel.GameState.GetCustomMoveTime(character);
+                    senderChannel.Broadcast(new
+                    {
+                        type = "custom_night",
+                        movetime = new {
+                            character,
+                            min = movetimes.Item1,
+                            max = movetimes.Item2
+                        }
+                    });
+                    break;
+
+                case "ai_level":
+                    if (!sender.Auth || sender.Session != msg.Session || senderChannel == null || !senderChannel.IsOwner(sender))
+                        return;
+                    if (senderChannel.GameState.IsPlayerReady(sender.Id) || msg.Character == null || !Enum.IsDefined(typeof(Character), msg.Character))
+                        return;
+                    character = (Character)msg.Character;
+                    senderChannel.GameState.SetRobotAILevel(character, Math.Clamp(msg.Value.GetValueOrDefault(0), 0, 20));
+                    senderChannel.Broadcast(new
+                    {
+                        type = "ai_level",
+                        ailevel = new
+                        {
+                            character,
+                            level = senderChannel.GameState.GetRobotAILevel(character)
+                        }
+                    });
                     break;
 
                 case "server_secret":
@@ -382,6 +507,24 @@ namespace FMServer
             LeaveChannel(client);
             client.CurrentChannel = channel;
             channel.Join(client);
+            var movetimes = Enum.GetValues<Character>().Where(c => c != Character.None && c != Character.Guard).Select(c =>
+            {
+                var movetimes = channel.GameState.GetCustomMoveTime(c);
+                return new
+                {
+                    character = c,
+                    min = movetimes.Item1,
+                    max = movetimes.Item2
+                };
+            }).ToList();
+            var ailevels = Enum.GetValues<Character>().Where(c => c != Character.None && c != Character.Guard).Select(c =>
+            {
+                return new
+                {
+                    character = c,
+                    level = channel.GameState.GetRobotAILevel(c)
+                };
+            }).ToList();
             client.Send(new
             {
                 type = "channel_joined",
@@ -391,8 +534,15 @@ namespace FMServer
                     owner = channel.Owner.Id,
                     clients = channel.IsEmpty ? [] : channel.GetMembers(),
                     maxplayers = channel.MaxPlayers,
-                    password = channel.IsPasswordProtected
-                },
+                    password = channel.IsPasswordProtected,
+                    gamemodes = new
+                    {
+                        animatronicai = channel.GameState.AllowAI,
+                        customnight = channel.GameState.IsCustomNight
+                    },
+                    movetimes,
+                    ailevels,
+                }
             });
             channel.Broadcast(new
             {

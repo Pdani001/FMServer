@@ -7,6 +7,7 @@
         public int? Value { get; set; }
 
         // -- Lobby --
+        public int? Character { get; set; }
         public string? Nick { get; set; }
         public string? Channel { get; set; }
         public string? Text { get; set; }

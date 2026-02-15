@@ -14,7 +14,7 @@ namespace FMServer
         {
             { Character.Guard, 0 }
         };
-        private readonly Dictionary<Character, (int, int)> defMoveTimes = new()
+        public static readonly Dictionary<Character, (int, int)> defaultMoveTimes = new()
         {
             { Character.Guard, (0, 0)},
             { Character.Freddy, (6, 15)},
@@ -22,6 +22,7 @@ namespace FMServer
             { Character.Chica, (10, 18)},
             { Character.Foxy, (15, 30)},
         };
+        private Dictionary<Character, (int, int)> customMoveTimes = new(defaultMoveTimes);
         private readonly Dictionary<Character, long> nextMoveOppurtunity = [];
         private readonly Dictionary<Character, int> characterPosition = new()
         {
@@ -31,13 +32,14 @@ namespace FMServer
             { Character.Chica, -1 },
             { Character.Foxy, 0 }
         };
-        private readonly Dictionary<Character, int> robotAILevel = new()
+        public static readonly Dictionary<Character, int> defaultRobotAILevel = new()
         {
             { Character.Freddy, 3},
             { Character.Bonnie, 5},
             { Character.Chica, 7},
             { Character.Foxy, 5},
         };
+        private readonly Dictionary<Character, int> robotAILevel = new(defaultRobotAILevel);
         private readonly Dictionary<Character, long> robotAttackTick = [];
         public int ReadyPlayerCount => readyPlayers.Count;
         public byte NightTime { get; set; } = 12;
@@ -53,6 +55,7 @@ namespace FMServer
                 }
             }
         }
+        public bool IsCustomNight { get; set; } = false;
         public bool AllowAI { get; set; } = false;
         public bool PowerDown { get; set; } = false;
         public Character Jumpscared { get; set; } = Character.None;
@@ -130,19 +133,31 @@ namespace FMServer
                 nextMoveOppurtunity[character] = tick;
         }
 
-        public int GetCurrentMoveTimer(Character character)
+        public void SetCustomMoveTime(Character character, int min, int max)
+        {
+            if (character == Character.None || character == Character.Guard)
+                return;
+            customMoveTimes[character] = (min, max);
+        }
+
+        public (int, int) GetCustomMoveTime(Character character)
+        {
+            return customMoveTimes.GetValueOrDefault(character, (0, 0));
+        }
+
+        public int GetCurrentMoveTime(Character character)
         {
             return characterMoveTimer.GetValueOrDefault(character, 1);
         }
 
-        public int GetNewMoveTimer(Character character)
+        public int GetNewMoveTime(Character character)
         {
-            if (!defMoveTimes.TryGetValue(character, out var timer))
+            if (!customMoveTimes.TryGetValue(character, out var timer))
                 return 0;
             return GameServer.RNG.Next(timer.Item1, timer.Item2) * GameServer.TICK_RATE;
         }
 
-        public void SetCharacterMoveTimer(Character character, int timer)
+        public void SetCharacterMoveTime(Character character, int timer)
         {
             if(playerCharacters.ContainsValue(character))
                 characterMoveTimer[character] = timer;
@@ -217,9 +232,9 @@ namespace FMServer
 
         public void SetRobotAILevel(Character character, int level)
         {
-            if (!robotAILevel.ContainsKey(character) || level < 0 || level > 20)
+            if (!robotAILevel.ContainsKey(character))
                 return;
-            robotAILevel[character] = level;
+            robotAILevel[character] = Math.Clamp(level, 0, 20);
         }
 
         public int GetRobotAILevel(Character character)
@@ -296,7 +311,7 @@ namespace FMServer
                     break;
             }
             if (update)
-                SetCharacterMoveTimer(character, GetNewMoveTimer(character));
+                SetCharacterMoveTime(character, GetNewMoveTime(character));
             SetCharacterPosition(character, target);
             return true;
         }

@@ -96,7 +96,7 @@ namespace FMServer
             foreach (var character in GameState.GetPlayerRobots())
             {
                 GameState.SetCharacterPosition(character, 0);
-                GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
+                GameState.SetCharacterMoveTime(character, GameState.GetNewMoveTime(character));
             }
             if (GameState.AllowAI)
             {
@@ -117,7 +117,7 @@ namespace FMServer
                 client?.Send(new
                 {
                     type = "move_timer",
-                    value = Math.Round(((double)GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(client.Id))) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
+                    value = Math.Round(((double)GameState.GetCurrentMoveTime(GameState.GetPlayerCharacter(client.Id))) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
                 });
             }
             State = ChannelState.InGame;
@@ -284,13 +284,20 @@ namespace FMServer
                 }
                 return;
             }
-            foreach(var character in GameState.GetPlayerRobots().Where(c=>GameState.GetCurrentMoveTimer(c) > 0))
+            foreach(var character in GameState.GetPlayerRobots().Where(c=>GameState.GetCurrentMoveTime(c) > 0))
             {
+                int timer = GameState.GetCurrentMoveTime(character);
                 if (character == Character.Freddy && GameState.GetCharacterPosition(character) == 7 && ((GameState.CameraActive && GameState.GetCharacterPosition(Character.Guard) == 7) || !GameState.CameraActive))
+                {
+                    _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Id) == character)?.Send(new
+                    {
+                        type = "move_timer",
+                        value = Math.Round(((double)timer) / GameServer.TICK_RATE, MidpointRounding.AwayFromZero)
+                    });
                     continue;
-                int timer = GameState.GetCurrentMoveTimer(character);
+                }
                 timer -= 1;
-                GameState.SetCharacterMoveTimer(character, timer);
+                GameState.SetCharacterMoveTime(character, timer);
                 _members.Values.FirstOrDefault(c => GameState.GetPlayerCharacter(c.Id) == character)?.Send(new
                 {
                     type = "move_timer",
@@ -345,7 +352,7 @@ namespace FMServer
                                     value = newpos
                                 });
                                 CheckCameraGarble(3, 2);
-                                GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
+                                GameState.SetCharacterMoveTime(character, GameState.GetNewMoveTime(character));
                                 if (GameState.AllowAI)
                                 {
                                     double moveTime = GameState.GetAIMoveTime(character);
@@ -398,7 +405,7 @@ namespace FMServer
                 }
                 if(newpos <= 10)
                 {
-                    GameState.SetCharacterMoveTimer(character, GameState.GetNewMoveTimer(character));
+                    GameState.SetCharacterMoveTime(character, GameState.GetNewMoveTime(character));
                     if (GameState.AllowAI)
                     {
                         double moveTime = GameState.GetAIMoveTime(character);
@@ -596,9 +603,9 @@ namespace FMServer
                     lastNightTimeUpdateTick = CurrentTick - (GameServer.TICK_RATE * 80);
                     break;
                 case "cheat#move":
-                    if (GameState.GetPlayerCharacter(input.Client.Id) == Character.Guard || GameState.GetCurrentMoveTimer(GameState.GetPlayerCharacter(input.Client.Id)) <= 1)
+                    if (GameState.GetPlayerCharacter(input.Client.Id) == Character.Guard || GameState.GetCurrentMoveTime(GameState.GetPlayerCharacter(input.Client.Id)) <= 1)
                         return;
-                    GameState.SetCharacterMoveTimer(GameState.GetPlayerCharacter(input.Client.Id), 1);
+                    GameState.SetCharacterMoveTime(GameState.GetPlayerCharacter(input.Client.Id), 1);
                     break;
                 case "door":
                     if (GameState.GetPlayerCharacter(input.Client.Id) != Character.Guard || GameState.Power <= 0 || GameState.CameraActive)
@@ -655,7 +662,7 @@ namespace FMServer
                     break;
                 case "move":
                     var movechar = GameState.GetPlayerCharacter(input.Client.Id);
-                    if ((movechar != Character.Guard && GameState.GetCurrentMoveTimer(movechar) > 0) || msg.Value == null)
+                    if ((movechar != Character.Guard && GameState.GetCurrentMoveTime(movechar) > 0) || msg.Value == null)
                         return;
                     int target = msg.Value.Value;
                     if (!GameState.IsValidMove(movechar, target))
@@ -711,7 +718,7 @@ namespace FMServer
                     break;
                 case "attack":
                     movechar = GameState.GetPlayerCharacter(input.Client.Id);
-                    if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCurrentMoveTimer(movechar) > 0 || GameState.Jumpscared != Character.None)
+                    if (movechar == Character.Guard || movechar == Character.Foxy || GameState.GetCurrentMoveTime(movechar) > 0 || GameState.Jumpscared != Character.None)
                         return;
                     target = StartAttack(movechar);
                     if(target != -1)
@@ -742,7 +749,7 @@ namespace FMServer
                     if (GameState.RightDoor)
                     {
                         target = GameState.GetAttackReturnTarget(movechar);
-                        GameState.SetCharacterMoveTimer(movechar, GameState.GetNewMoveTimer(movechar));
+                        GameState.SetCharacterMoveTime(movechar, GameState.GetNewMoveTime(movechar));
                     }
                     else
                     {
@@ -847,8 +854,7 @@ namespace FMServer
                     if (IsOwner(sender))
                     {
                         text += "\n- /pw [password] - Sets or unsets the lobby password"
-                            + "\n- /kick <nick> - Kicks the first player with the given nickname"
-                            + "\n- /ai <on/off> [difficulty: 0/1] - Toggle AI and set difficulty to normal [0] (3/5/7/5) or hard [1] (20/20/20/20)";
+                            + "\n- /kick <nick> - Kicks the first player with the given nickname";
                     }
                     break;
                 case "list":
@@ -899,45 +905,6 @@ namespace FMServer
                         break;
                     }
                     text = "No player found with the given nick.";
-                    break;
-                case "ai":
-                    if (!IsOwner(sender))
-                        break;
-                    if (args.Length == 0 || !OnOffArray.Contains(args[0].ToLower()))
-                    {
-                        text = "Usage: /ai <on/off> [difficulty: 0/1]";
-                        break;
-                    }
-                    GameState.AllowAI = args[0].ToLower() == "on";
-                    byte difficulty = 0;
-                    if (args.Length > 1)
-                    {
-                        if (!byte.TryParse(args[1], out difficulty) || difficulty > 1)
-                        {
-                            text = "Difficulty must be 0 (normal) or 1 (hard)";
-                            break;
-                        }
-                    }
-                    if (difficulty == 0)
-                    {
-                        GameState.SetRobotAILevel(Character.Freddy, 3);
-                        GameState.SetRobotAILevel(Character.Bonnie, 5);
-                        GameState.SetRobotAILevel(Character.Chica, 7);
-                        GameState.SetRobotAILevel(Character.Foxy, 5);
-                    }
-                    else
-                    {
-                        foreach (var character in Enum.GetValues<Character>())
-                        {
-                            GameState.SetRobotAILevel(character, 20);
-                        }
-                    }
-                    broadcast = true;
-                    text = $"AI is now {args[0].ToLower()}";
-                    if(GameState.AllowAI)
-                    {
-                        text += $" with {(difficulty == 0 ? "normal" : "hard")} difficulty";
-                    }
                     break;
             }
             Action<object> action = broadcast ? Broadcast : sender.Send;
